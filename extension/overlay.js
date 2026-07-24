@@ -1003,11 +1003,23 @@
 
     // Legend: what the two flag tiers mean. A violation is a WCAG failure an
     // automated checker reports; an advisory is a best-practice finding.
+    // Built with DOM calls, not innerHTML, so store linters stay quiet.
     const foot = document.createElement('footer');
     foot.className = 'foot';
-    foot.innerHTML =
-      '<span class="k"><span class="g v" aria-hidden="true">✕</span> Violation (WCAG fail)</span>' +
-      '<span class="k"><span class="g a" aria-hidden="true">⚠</span> Advisory (best practice)</span>';
+    const legendItem = (glyphClass, glyph, text) => {
+      const k = document.createElement('span');
+      k.className = 'k';
+      const g = document.createElement('span');
+      g.className = `g ${glyphClass}`;
+      g.setAttribute('aria-hidden', 'true');
+      g.textContent = glyph;
+      k.append(g, ` ${text}`);
+      return k;
+    };
+    foot.append(
+      legendItem('v', '✕', 'Violation (WCAG fail)'),
+      legendItem('a', '⚠', 'Advisory (best practice)')
+    );
 
     // A tooltip that fires on hover AND keyboard focus, for any [data-tip]
     // control. Native title only shows on hover, so keyboard users never saw it.
@@ -1127,17 +1139,27 @@
     if (!panelList) return;
     panelList.textContent = '';
 
-    // Summary line: violations, advisories, page-level findings.
-    const bits = [`${stats.total} heading${stats.total === 1 ? '' : 's'}`];
-    if (stats.violations) bits.push(`<span class="v">✕ ${stats.violations}</span>`);
+    // Summary line: violations, advisories, page-level findings. DOM calls,
+    // not innerHTML, so store linters stay quiet.
+    panelSummary.textContent = '';
+    const colored = (cls, text) => {
+      const s = document.createElement('span');
+      s.className = cls;
+      s.textContent = text;
+      return s;
+    };
+    panelSummary.append(`${stats.total} heading${stats.total === 1 ? '' : 's'}`);
+    if (stats.violations) panelSummary.append(' · ', colored('v', `✕ ${stats.violations}`));
     const adv = stats.advisories + pageProblems.length;
-    if (adv) bits.push(`<span class="a">⚠ ${adv}</span>`);
-    if (!walker.canPierceClosed) bits.push('open roots only');
-    let summaryHTML = bits.join(' · ');
+    if (adv) panelSummary.append(' · ', colored('a', `⚠ ${adv}`));
+    if (!walker.canPierceClosed) panelSummary.append(' · open roots only');
     for (const code of pageProblems) {
-      summaryHTML += `<br><span class="a">⚠</span> ${PROBLEMS[code].short}: ${PROBLEMS[code].desc}`;
+      panelSummary.append(
+        document.createElement('br'),
+        colored('a', '⚠'),
+        ` ${PROBLEMS[code].short}: ${PROBLEMS[code].desc}`
+      );
     }
-    panelSummary.innerHTML = summaryHTML;
 
     if (!items.length) {
       const li = document.createElement('li');

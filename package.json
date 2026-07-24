@@ -1,12 +1,13 @@
 {
   "name": "heading-inspector-for-shadow-dom",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Chrome extension that outlines, lists, and audits headings, including inside closed shadow roots.",
   "type": "module",
   "scripts": {
     "build:bookmarklet": "node build/build-bookmarklet.mjs",
     "build:site": "node build/build-site.mjs",
+    "build:store": "node build/build-store-zips.mjs",
     "test": "playwright test"
   },
   "devDependencies": {
