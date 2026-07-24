@@ -79,14 +79,16 @@ Findings come in two tiers, since an auditor files one as a defect and the other
 | Finding | Tier | Basis |
 | --- | --- | --- |
 | Empty heading (no perceivable accessible name) | **Violation** | WCAG 1.3.1 Info & Relationships (A), 2.4.6 Headings & Labels (AA); axe `empty-heading` |
-| Skipped level (e.g. `h2` to `h4`) | Advisory | WCAG 1.3.1, technique G141. Not a strict failure, but a standard audit finding. |
-| No `h1` on the page | Advisory | Relates to 1.3.1 and 2.4.10 Section Headings (AAA) |
+| Skipped level (e.g. `h2` to `h4`) | Advisory | WCAG 1.3.1, technique G141; axe `heading-order`. Not a strict failure, but a standard audit finding. |
+| No `h1` on the page | Advisory | Relates to 1.3.1 and 2.4.10 Section Headings (AAA); axe `page-has-heading-one` |
 | More than one `h1` | Advisory | HTML allows it, but it weakens the top-level outline |
 | First heading deeper than `h1` | Advisory | Advisory |
 
 "Empty" is judged against an approximate accessible name, not raw text, so a heading named by `aria-label`, `aria-labelledby`, a captioned image, or `title` isn't a false positive. The hierarchy is computed over headings in the accessibility tree. `display:none`, `aria-hidden`, and `inert` headings are left out of the checks (and out of annotation), while off-screen and visually hidden ones still count.
 
-Violations get a heavier double-red ring on the box and a `✕` in the label and row. Advisories get a single amber ring and a `⚠`. The ring is redundant with the label text, so a grayscale or CVD screenshot still reads. The chip and the panel summary count each tier, and the copied record and copied outline cite the Success Criterion number.
+Violations get a heavier double-red ring on the box and a `✕` in the label and row. Advisories get a single amber ring and a `⚠`. The ring is redundant with the label text, so a grayscale or CVD screenshot still reads. The chip and the panel summary count each tier, and the copied record and copied outline cite the Success Criterion number and, where one exists, the equivalent axe rule.
+
+These checks reimplement axe-core's heading rules (`empty-heading`, `heading-order`, `page-has-heading-one`) rather than bundling axe-core, on purpose. axe-core can't reach closed shadow roots (no page-world API can), so it would miss exactly the headings this tool exists to find, and it's ~550KB, which would blow the bookmarklet. Naming the equivalent rule in the output keeps the results interoperable with axe-based workflows.
 
 ![The outline sidebar listing headings by level, with a skipped-level advisory flagged in amber and an empty-heading violation flagged in red](docs/images/audit-sidebar.png)
 

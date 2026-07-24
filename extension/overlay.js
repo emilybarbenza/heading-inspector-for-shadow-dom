@@ -33,17 +33,23 @@
   // an auditor files the first as a defect and the second as a note.
   const VIOLATION = 'violation';
   const ADVISORY = 'advisory';
+  // Each finding names the equivalent axe-core rule where one exists, so the
+  // output drops into axe-based workflows. axe-core itself isn't bundled: it
+  // can't reach closed shadow roots (no page-world API can), which is the whole
+  // reason this tool exists, and it would miss exactly the headings we're after.
   const PROBLEMS = {
     empty: {
       tier: VIOLATION,
       short: 'empty',
       sc: '1.3.1, 2.4.6',
+      axe: 'empty-heading',
       desc: 'Heading has no perceivable text (WCAG 1.3.1 Info & Relationships, 2.4.6 Headings & Labels).',
     },
     skipped: {
       tier: ADVISORY,
       short: 'skipped level',
       sc: '1.3.1',
+      axe: 'heading-order',
       desc: 'Heading level jumps down by more than one from the previous heading (WCAG 1.3.1, technique G141).',
     },
     'multiple-h1': {
@@ -56,6 +62,7 @@
       tier: ADVISORY,
       short: 'no h1',
       sc: '1.3.1',
+      axe: 'page-has-heading-one',
       desc: 'Page has no level-1 heading (advisory; relates to WCAG 1.3.1 and 2.4.10 Section Headings).',
     },
     'first-not-h1': {
@@ -65,6 +72,11 @@
       desc: 'The first heading in reading order is deeper than level 1 (advisory).',
     },
   };
+
+  // Tag for a finding in copied text, e.g. "WCAG 1.3.1, 2.4.6 · axe: empty-heading".
+  function findingTag(p) {
+    return `WCAG ${p.sc}${p.axe ? ` · axe: ${p.axe}` : ''}`;
+  }
 
   // White text on each of these clears 5.9:1, and most clear 6.5:1. The label
   // text also carries the level, so the palette is redundant, not load-bearing.
@@ -414,7 +426,7 @@
     ];
     for (const code of item.problems) {
       const p = PROBLEMS[code];
-      lines.push(`${p.tier === VIOLATION ? 'VIOLATION' : 'ADVISORY'} [WCAG ${p.sc}]: ${p.desc}`);
+      lines.push(`${p.tier === VIOLATION ? 'VIOLATION' : 'ADVISORY'} [${findingTag(p)}]: ${p.desc}`);
     }
     if (item.closed) {
       lines.push(
@@ -436,7 +448,7 @@
     }
     for (const code of pageProblems) {
       const p = PROBLEMS[code];
-      lines.push(`ADVISORY [WCAG ${p.sc}]: ${p.desc}`);
+      lines.push(`ADVISORY [${findingTag(p)}]: ${p.desc}`);
     }
     lines.push('');
     for (const item of items) {
