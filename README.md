@@ -2,7 +2,7 @@
 
 This visual tool outlines, labels, lists, and performs accessibility checks for every heading on a webpage. It finds headings even when they're nested deep inside **open or closed** shadow roots, which is common for modern web applications.
 
-Most heading extensions and bookmarlets stop at the first closed root, because a content script that reads `element.shadowRoot` gets `null` there.
+Most heading extensions and bookmarklets stop at the first closed root, because a content script that reads `element.shadowRoot` gets `null` there.
 
 This tool was designed with accessibility testers and engineers in mind, and is ideal for capturing heading structure details for defect reports, accessibility demos, and more.
 
