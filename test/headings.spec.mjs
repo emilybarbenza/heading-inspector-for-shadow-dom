@@ -188,6 +188,10 @@ test.describe('page world (bookmarklet equivalent)', () => {
  * Extension context. This is the test that matters: six closed roots deep.
  */
 test.describe('extension context', () => {
+  // This test launches its own chromium with the extension loaded, so running
+  // it under the firefox project would just test chromium twice.
+  test.skip(({ browserName }) => browserName !== 'chromium', 'chromium-only');
+
   test('reaches headings six closed roots deep', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'sho-'));
 

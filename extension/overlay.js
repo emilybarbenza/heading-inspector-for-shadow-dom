@@ -614,6 +614,11 @@
         12% { opacity: 1; }
         100% { opacity: 0.55; }
       }
+      /* No pulse for people who've asked the OS for less motion. The highlight
+         still appears, it just doesn't animate. */
+      @media (prefers-reduced-motion: reduce) {
+        .flash { animation: none; opacity: 0.8; }
+      }
     `;
     layer = document.createElement('div');
     layer.className = 'layer';
@@ -642,7 +647,10 @@
       .chip {
         display: flex;
         align-items: center;
-        gap: 10px;
+        /* Wraps instead of overflowing, so the counts and buttons stack on a
+           phone-width viewport. */
+        flex-wrap: wrap;
+        gap: 6px 10px;
         max-width: min(92vw, 720px);
         padding: 7px 10px;
         background: #10161c;
@@ -769,7 +777,8 @@
         z-index: 2147483646 !important;
         forced-color-adjust: none;
         --bg: #ffffff; --fg: #14181d; --muted: #5a6672; --line: #d7dde3;
-        --rowhover: #eef2f6; --panelw: 340px;
+        /* Caps at 88vw so the panel never swallows a phone-width viewport. */
+        --rowhover: #eef2f6; --panelw: min(340px, 88vw);
         /* Flag text colors, darkened enough to clear 4.5:1 on the white panel.
            The lighter shades used before failed contrast in the light theme. */
         --flag-v: #c1121f; --flag-a: #8a6300;
@@ -1079,9 +1088,12 @@
     if (!panelHost) return;
     e.preventDefault();
     resizeStartX = e.clientX;
-    resizeStartW = parseInt(getComputedStyle(panelHost).getPropertyValue('--panelw'), 10) || 340;
+    // Measure the rendered width; the CSS var may hold a min() expression.
+    const panelEl = panelHost.shadowRoot.querySelector('.panel');
+    resizeStartW = panelEl ? Math.round(panelEl.getBoundingClientRect().width) : 340;
     const move = (ev) => {
-      const w = Math.min(720, Math.max(240, resizeStartW + (resizeStartX - ev.clientX)));
+      const cap = Math.min(720, Math.floor(innerWidth * 0.92));
+      const w = Math.min(cap, Math.max(240, resizeStartW + (resizeStartX - ev.clientX)));
       panelHost.style.setProperty('--panelw', `${w}px`);
     };
     const up = () => {
@@ -1211,8 +1223,11 @@
   function goTo(item) {
     const el = item.el;
     if (!el || !el.isConnected) return;
+    // Jump instead of glide when the OS asks for reduced motion.
+    const reduced =
+      typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
     try {
-      el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
+      el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: reduced ? 'auto' : 'smooth' });
     } catch (_) {
       try {
         el.scrollIntoView();

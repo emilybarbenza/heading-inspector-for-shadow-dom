@@ -14,7 +14,21 @@ The interface consists of:
 
 ![Every heading in a demo docs article boxed and labeled by level, with the outline sidebar open on the right showing the same headings as an indented tree](docs/images/overlay-hero.png)
 
+## Try it without installing anything
+
+- [Live demo](https://emilybarbenza.github.io/heading-inspector-for-shadow-dom/demo/standalone.html): a docs page built from nested shadow roots with two planted defects, tool already running.
+- [Bookmarklet](https://emilybarbenza.github.io/heading-inspector-for-shadow-dom/bookmarklet.html): drag it to your bookmarks bar and run it on any page in any desktop browser. Open roots only, and the chip says so.
+
+Closed shadow roots need the extension below.
+
 ## How to install
+
+Get the code first, either way works:
+
+- Download the extension zip from [Releases](https://github.com/emilybarbenza/heading-inspector-for-shadow-dom/releases) and unzip it somewhere permanent (not Downloads, since the browser loads it from that folder from then on), or
+- Clone the repo and use its `extension/` folder.
+
+### Chrome, Edge, Brave, Opera, Vivaldi
 
 1. Navigate to `chrome://extensions`
 2. Enable the **Developer mode** switch
@@ -28,10 +42,28 @@ The interface consists of:
 6. Select the icon, or press `Alt+Shift+H`, to toggle it on a tab
 
 Load the extension through `chrome://extensions`, not the `--load-extension` command-line
-switch: Chrome 137+ ignores unpacked extensions passed on the command line. For
-an install-free look on a page built from *open* shadow roots, open
-`demo/standalone.html`. It loads the same walker and overlay as ordinary page
-scripts, no extension required (closed roots need the extension).
+switch: Chrome 137+ ignores unpacked extensions passed on the command line.
+
+### Firefox
+
+The same code works in Firefox, which has its own closed-root API the walker
+already uses. One manifest serves both browsers (Chrome reads
+`background.service_worker`, Firefox reads `background.scripts`).
+
+1. Navigate to `about:debugging#/runtime/this-firefox`
+2. Select **Load Temporary Add-on** and pick `extension/manifest.json`
+3. Toggle it from the toolbar icon or `Alt+Shift+H`
+
+Temporary add-ons unload when Firefox quits. A permanent install needs the
+add-on signed through [addons.mozilla.org](https://addons.mozilla.org), which is
+free; until it's published there, temporary loading is the way.
+
+### Phones and tablets
+
+Chrome extensions don't run on mobile, but **Firefox for Android** runs real
+extensions, so the closed-root tool works there once it's on
+addons.mozilla.org. Until then, the bookmarklet works in most mobile browsers
+for open roots.
 
 ## How to use
 
@@ -122,6 +154,8 @@ If the chain crosses a closed root, the record says so, because the console expr
 - Flag colors are theme-aware and clear WCAG AA (4.5:1) as text on both the light and dark panel: violation `#c1121f` / `#ff6b74`, advisory `#8a6300` / `#e0a83a`. The on-page rings sit against a 1px white halo and clear the 3:1 non-text bar, and they're redundant with the `✕`/`⚠` glyphs so color is never the only cue.
 - The panel is theme-aware (`prefers-color-scheme`), so it's legible over light or dark pages without washing out a screenshot.
 - `forced-color-adjust: none` on every box and label. Otherwise Windows High Contrast overrides `border-color` and flattens the level encoding.
+- `prefers-reduced-motion` is respected: the jump-to highlight doesn't pulse and the scroll jumps instead of gliding.
+- The panel caps its width on narrow viewports and the chip wraps instead of overflowing, so both stay usable on a phone-sized window.
 
 ## Privacy
 
@@ -131,10 +165,10 @@ No network requests. No `host_permissions`, no content scripts registered agains
 
 | Environment | API | Closed roots |
 | --- | --- | --- |
-| Chrome / Edge extension | `chrome.dom.openOrClosedShadowRoot` | yes |
-| Firefox extension | `Element.openOrClosedShadowRoot` | yes |
+| Chrome / Edge / Brave / Opera / Vivaldi extension | `chrome.dom.openOrClosedShadowRoot` | yes |
+| Firefox extension (desktop and Android) | `Element.openOrClosedShadowRoot` | yes |
 | Safari extension | none | **no** |
-| Bookmarklet / page world | `Element.shadowRoot` | **no** |
+| Bookmarklet / page world (any browser) | `Element.shadowRoot` | **no** |
 
 The chip prints `open roots only` whenever closed roots are out of reach. A heading tool that quietly under-reports is worse than no tool.
 
@@ -151,9 +185,13 @@ Writes `dist/bookmarklet.html` with a drag-to-install link. This exists because 
 ## Tests
 
 ```
-npm i -D @playwright/test && npx playwright install chromium
+npm ci && npx playwright install chromium firefox
 npx playwright test
 ```
+
+The page-world tests run on both real Chromium and real Firefox. The
+extension-context test (six closed roots deep) is chromium-only, since
+Playwright can't load a temporary add-on into Firefox.
 
 `test/fixtures/deep-shadow.html` covers six closed roots nested one per level, open roots inside open roots, declarative shadow DOM, slotted headings that `textContent` can't see, `aria-level` overriding the tag, `role="heading"` with and without a level, `role="presentation"` on an `h3`, sr-only and off-screen and `display:none` and `visibility:hidden` headings, `aria-hidden` and `inert` subtrees, a same-origin frame with its own closed root, and a heading appended after load.
 

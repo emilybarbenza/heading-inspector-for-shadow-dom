@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Heading Inspector for Shadow DOM</title>
+<meta name="description" content="Outlines, lists, and audits every heading on a page, including inside closed shadow roots, with WCAG-keyed hierarchy flags.">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg:#ffffff; --text:#1a1f24; --muted:#5b6570; --line:#e6e8eb; --accent:#2e9e6b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0d1116; --text:#e8ecf1; --muted:#9aa4af; --line:#232a31; --accent:#3ecf8e; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.65 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 680px; margin: 0 auto; padding: 48px 24px 96px; }
+  h1 { font-size: 28px; line-height: 1.2; letter-spacing: -0.015em; margin: 0 0 10px; }
+  .sub { color: var(--muted); margin: 0 0 36px; }
+  h2 { font-size: 19px; margin: 40px 0 10px; padding-top: 20px; border-top: 1px solid var(--line); }
+  p { margin: 0 0 14px; }
+  a { color: inherit; }
+  .card {
+    border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; margin: 0 0 14px;
+  }
+  .card h3 { margin: 0 0 6px; font-size: 16px; }
+  .card p { margin: 0; color: var(--muted); font-size: 14px; }
+  .btn {
+    display: inline-block; margin-top: 10px; padding: 7px 14px;
+    border: 1px solid var(--text); border-radius: 6px;
+    font-weight: 600; font-size: 14px; text-decoration: none;
+  }
+  .btn:hover { background: var(--text); color: var(--bg); }
+  code { background: rgba(128,128,128,0.15); padding: .1em .35em; border-radius: 4px; font-size: 14px; }
+  ul { padding-left: 1.2em; }
+  li { margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Heading Inspector for Shadow DOM</h1>
+  <p class="sub">Outlines, lists, and audits every heading on a page, even headings nested deep inside open or closed shadow roots.</p>
+
+  <p>Most heading tools stop at the first closed shadow root, because page scripts reading <code>element.shadowRoot</code> get <code>null</code> there. Browser extensions have a privileged API that reaches inside, so this tool uses it. You get an in-place overlay for screenshots, a keyboard-operable outline sidebar, and WCAG-keyed flags for empty headings, skipped levels, and missing or duplicate h1.</p>
+
+  <h2>Try it right now</h2>
+  <div class="card">
+    <h3>Live demo</h3>
+    <p>A docs page built from nested shadow roots, with two planted heading defects. The tool is already running on it.</p>
+    <a class="btn" href="demo/standalone.html">Open the demo</a>
+  </div>
+  <div class="card">
+    <h3>Bookmarklet</h3>
+    <p>Runs on any page in any desktop browser, no install. Open roots only, and it says so when that's the case.</p>
+    <a class="btn" href="bookmarklet.html">Get the bookmarklet</a>
+  </div>
+  <div class="card">
+    <h3>Extension (Chrome, Edge, Firefox)</h3>
+    <p>The full tool. Only the extension can reach closed shadow roots.</p>
+    <a class="btn" href="https://github.com/emilybarbenza/heading-inspector-for-shadow-dom/releases">Download from Releases</a>
+  </div>
+
+  <h2>Which browsers and devices</h2>
+  <ul>
+    <li><strong>Chrome, Edge, Brave, Opera, Vivaldi</strong> (desktop): extension with full closed-root support.</li>
+    <li><strong>Firefox</strong> (desktop and Android): extension with full closed-root support.</li>
+    <li><strong>Safari and everything else</strong>: the bookmarklet, open roots only.</li>
+  </ul>
+
+  <h2>Source</h2>
+  <p>MIT licensed, no network requests, nothing leaves the browser. Install steps, docs, and code are on <a href="https://github.com/emilybarbenza/heading-inspector-for-shadow-dom">GitHub</a>.</p>
+</main>
+</body>
+</html>
