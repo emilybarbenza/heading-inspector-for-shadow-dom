@@ -8,6 +8,9 @@
  *   dist/chrome-store.zip   service_worker only, no browser_specific_settings
  *   dist/firefox-amo.zip    scripts only, keeps browser_specific_settings
  *
+ * Plus the load-unpacked download the README links from Releases:
+ *   dist/heading-inspector-for-shadow-dom-<version>.zip   manifest untouched
+ *
  * Usage: node build/build-store-zips.mjs
  */
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -23,16 +26,15 @@ await mkdir(join(root, 'dist'), { recursive: true });
 // `npm version` bump would quietly produce store packages carrying the old
 // number — which AMO rejects on upload as an already-published version. Catch
 // the drift here instead of at the upload form.
-{
-  const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
-  const man = JSON.parse(await readFile(join(root, 'extension', 'manifest.json'), 'utf8'));
-  if (pkg.version !== man.version) {
-    console.error(
-      `ERROR: version mismatch — package.json ${pkg.version}, extension/manifest.json ${man.version}.`
-    );
-    process.exit(1);
-  }
+const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+const man = JSON.parse(await readFile(join(root, 'extension', 'manifest.json'), 'utf8'));
+if (pkg.version !== man.version) {
+  console.error(
+    `ERROR: version mismatch — package.json ${pkg.version}, extension/manifest.json ${man.version}.`
+  );
+  process.exit(1);
 }
+const version = man.version;
 
 async function pack(name, patch) {
   const stage = join(tmpdir(), `hisd-pack-${name}`);
@@ -59,3 +61,8 @@ await pack('chrome-store', (m) => {
 await pack('firefox-amo', (m) => {
   m.background = { scripts: ['background.js'] };
 });
+
+// The load-unpacked download the README points at, carrying the cross-browser
+// manifest untouched. It used to be zipped by hand for each release, which is
+// precisely the step that drifts from the tag it is named after.
+await pack(`heading-inspector-for-shadow-dom-${version}`, () => {});
