@@ -1,4 +1,4 @@
-# Headings Bookmarklet for Shadow DOM
+# Headings bookmarklet for shadow DOM
 
 Outlines, labels, lists, and audits every heading on a page. It finds headings even when they're nested deep inside **open or closed** shadow roots.
 
