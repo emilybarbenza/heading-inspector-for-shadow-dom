@@ -1,4 +1,4 @@
-# Shadow Heading Outliner
+# Headings Bookmarklet for Shadow DOM
 
 Outlines, labels, lists, and audits every heading on a page, including headings
 nested arbitrarily deep in **open or closed** shadow roots.
@@ -29,7 +29,7 @@ Unpacked, until it's on the Web Store:
 
 1. `chrome://extensions` → enable Developer mode
 2. Load unpacked → select the `extension/` directory
-3. Open the puzzle-piece menu and pin **Shadow Heading Outliner** so its icon
+3. Open the puzzle-piece menu and pin **Headings Bookmarklet for Shadow DOM** so its icon
    is on the toolbar
 4. Click the icon, or press `Alt+Shift+H`, to toggle it on a tab
 

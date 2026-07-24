@@ -15,6 +15,6 @@ chrome.action.onClicked.addListener(async (tab) => {
       files: ['walker.js', 'overlay.js'],
     });
   } catch (err) {
-    console.warn('Shadow Heading Outliner: injection failed', err);
+    console.warn('Headings Bookmarklet for Shadow DOM: injection failed', err);
   }
 });

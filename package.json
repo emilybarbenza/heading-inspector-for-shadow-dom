@@ -1,5 +1,5 @@
 {
-  "name": "shadow-heading-outliner",
+  "name": "headings-bookmarklet-for-shadow-dom",
   "version": "0.2.0",
   "private": true,
   "description": "Chrome extension that outlines, lists, and audits headings, including inside closed shadow roots.",

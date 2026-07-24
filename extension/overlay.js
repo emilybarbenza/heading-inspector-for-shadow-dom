@@ -13,7 +13,7 @@
 
   const walker = window.__shadowWalker;
   if (!walker) {
-    console.error('Shadow Heading Outliner: walker.js did not load.');
+    console.error('Headings Bookmarklet for Shadow DOM: walker.js did not load.');
     return;
   }
 

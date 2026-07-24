@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Shadow Heading Outliner",
+  "name": "Headings Bookmarklet for Shadow DOM",
   "version": "0.2.0",
   "description": "Outlines, lists, and audits every heading on a page, including inside closed shadow roots, with WCAG-keyed hierarchy flags.",
   "permissions": ["activeTab", "scripting", "storage"],
