@@ -10,6 +10,8 @@ Three surfaces, all built on one shadow-piercing walk:
 - **Outline sidebar**: a docked, keyboard-operable tree of the headings in reading order. Click a row to scroll to it and flash it.
 - **Hierarchy audit**: WCAG-keyed flags for empty headings, skipped levels, and missing or duplicate `h1`, split into violations and best-practice advisories.
 
+![Every heading in a demo web app boxed and labeled by level, with the outline sidebar open on the right showing the same headings as an indented tree](docs/images/overlay-hero.png)
+
 ## Privacy
 
 No network requests. No `host_permissions`, no content scripts registered against any URL. The walker only runs in the tab you click on, and only when you click. The one thing stored is your label-detail preference in `chrome.storage.local`. Nothing leaves the browser.
@@ -17,7 +19,8 @@ No network requests. No `host_permissions`, no content scripts registered agains
 ## Install
 
 1. `chrome://extensions` → enable the Developer mode switch
-<img width="2218" height="1038" alt="Chrome Extensions page shows "Developer mode" switch and "Load unpacked" button highlighted" src="https://github.com/user-attachments/assets/311a50d2-e458-43a7-a093-d37b0e80969f" />
+
+   ![The chrome://extensions page with the Developer mode switch on and the Load unpacked button highlighted](docs/images/chrome-extensions-page.png)
 
 2. Select the Load unpacked button
 3. Select the `extension/` directory
@@ -28,7 +31,7 @@ No network requests. No `host_permissions`, no content scripts registered agains
 Load the extension through `chrome://extensions`, not the `--load-extension` command-line
 switch: Chrome 137+ ignores unpacked extensions passed on the command line. For
 an install-free look on a page built from *open* shadow roots, open
-`demo/standalone.html`. Tt loads the same walker and overlay as ordinary page
+`demo/standalone.html`. It loads the same walker and overlay as ordinary page
 scripts, no extension required (closed roots need the extension).
 
 ## Use
@@ -64,6 +67,10 @@ The panel is the one part of the tool that is *not* `aria-hidden`, because an au
 
 The panel sits over the right edge of the page instead of reflowing it. That's on purpose, since reflowing would change the layout you're auditing. Collapse it, resize it by dragging its inner edge, or Quiet it to see what's underneath.
 
+![The overlay and outline sidebar on the same app in dark mode](docs/images/overlay-dark.png)
+
+*The panel follows the page's light or dark theme.*
+
 ## Hierarchy audit
 
 Findings come in two tiers, since an auditor files one as a defect and the other as a note:
@@ -79,6 +86,8 @@ Findings come in two tiers, since an auditor files one as a defect and the other
 "Empty" is judged against an approximate accessible name, not raw text, so a heading named by `aria-label`, `aria-labelledby`, a captioned image, or `title` isn't a false positive. The hierarchy is computed over headings in the accessibility tree. `display:none`, `aria-hidden`, and `inert` headings are left out of the checks (and out of annotation), while off-screen and visually hidden ones still count.
 
 Violations get a heavier double-red ring on the box and a `✕` in the label and row. Advisories get a single amber ring and a `⚠`. The ring is redundant with the label text, so a grayscale or CVD screenshot still reads. The chip and the panel summary count each tier, and the copied record and copied outline cite the Success Criterion number.
+
+![The outline sidebar listing headings by level, with a skipped-level advisory flagged in amber and an empty-heading violation flagged in red](docs/images/audit-sidebar.png)
 
 ### Label detail modes
 
