@@ -26,6 +26,16 @@
   const BOX_PAD = 5;
   const MAX_HEADINGS = 3000;
   const LABEL_MODES = ['level', 'component', 'chain'];
+  // Coalesce mutation bursts, but never let a busy page postpone a rescan past
+  // the ceiling.
+  const RESCAN_DEBOUNCE = 250;
+  const RESCAN_MAX_WAIT = 1000;
+  // A custom element already sitting in the markup can be upgraded at any time.
+  // Its connectedCallback attaches a shadow root and fills it, all of which
+  // happens inside a root nothing is observing yet, so no mutation fires
+  // anywhere and the headings it renders would never be noticed. Design systems
+  // that load their definitions asynchronously do this on every page.
+  const SAFETY_SCAN = 1500;
 
   // Two tiers, keyed to WCAG. A violation is something an automated checker
   // (like axe) reports as a failure. An advisory is a best-practice finding
@@ -105,12 +115,16 @@
   let tipEl = null;
   let panelHidden = false;
   let items = [];
+  let modalEl = null;
   let pageProblems = [];
   let stats = emptyStats();
   const boxes = [];
   const labels = [];
   let rafPending = false;
   let rescanTimer = 0;
+  let rescanDeadline = 0;
+  let safetyTimer = 0;
+  let modalHome = null;
   let observers = [];
   let altHeld = false;
   let flashEl = null;
@@ -118,10 +132,11 @@
   function emptyStats() {
     return {
       total: 0,
+      srOnly: 0,
       hidden: 0,
       notRendered: 0,
-      offscreen: 0,
       ariaHidden: 0,
+      behindModal: 0,
       violations: 0,
       advisories: 0,
       truncated: false,
@@ -159,18 +174,51 @@
 
   // ----------------------------------------------------------------- headings
 
+  // WAI-ARIA 1.2 role names. A role attribute is a fallback list and the browser
+  // takes the FIRST token it recognises, so telling a known role from a typo is
+  // the only way to know which one wins. Without this, role="none heading" and
+  // role="button heading" both read as headings when the browser says they are
+  // a presentational element and a button.
+  const ARIA_ROLES = new Set(
+    ('alert alertdialog application article associationlist associationlistitemkey ' +
+      'associationlistitemvalue banner blockquote button caption cell checkbox code ' +
+      'columnheader combobox command comment complementary composite contentinfo ' +
+      'definition deletion dialog directory document emphasis feed figure form ' +
+      'generic grid gridcell group heading image img input insertion landmark link ' +
+      'list listbox listitem log main mark marquee math menu menubar menuitem ' +
+      'menuitemcheckbox menuitemradio meter navigation none note option paragraph ' +
+      'presentation progressbar radio radiogroup range region roletype row rowgroup ' +
+      'rowheader scrollbar search searchbox section sectionhead select separator ' +
+      'slider spinbutton status strong structure subscript suggestion superscript ' +
+      'switch tab table tablist tabpanel term textbox time timer toolbar tooltip ' +
+      'tree treegrid treeitem widget window').split(' ')
+  );
+
+  // The role the browser actually computes from a fallback list: the first
+  // recognised token. Unknown tokens are skipped, not treated as a role.
+  function effectiveRole(el) {
+    const attr = (el.getAttribute('role') || '').trim().toLowerCase();
+    if (!attr) return '';
+    for (const token of attr.split(/\s+/)) {
+      if (ARIA_ROLES.has(token)) return token;
+    }
+    return '';
+  }
+
   function headingInfo(el) {
     const native = /^h([1-6])$/.exec(el.localName || '');
-    const roleAttr = (el.getAttribute('role') || '').trim().toLowerCase();
-    const roles = roleAttr ? roleAttr.split(/\s+/) : [];
-    const isRoleHeading = roles.includes('heading');
+    const role = effectiveRole(el);
+    const isRoleHeading = role === 'heading';
 
     // An explicit non-heading role beats the native tag.
-    if (native && roles.length && !isRoleHeading) return null;
+    if (native && role && !isRoleHeading) return null;
     if (!native && !isRoleHeading) return null;
 
+    // Strictly an integer. parseInt would read aria-level="9e2" as 9 and invent
+    // a heading level the browser never computes, which then manufactures a
+    // skipped-level advisory out of nothing.
     const raw = el.getAttribute('aria-level');
-    const parsed = raw === null ? NaN : parseInt(raw, 10);
+    const parsed = raw !== null && /^\s*\d+\s*$/.test(raw) ? parseInt(raw, 10) : NaN;
     const hasAria = Number.isInteger(parsed) && parsed > 0;
 
     if (native) {
@@ -179,6 +227,54 @@
     }
     // role="heading" with no aria-level computes to level 2.
     return { level: hasAria ? parsed : 2, fromAria: true };
+  }
+
+  function isNativeModal(el) {
+    if (!el) return false;
+    try {
+      return el.matches(':modal');
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /**
+   * A `showModal()` dialog lives in the top layer, which paints above every
+   * z-index and makes everything outside it inert. Left alone that means the
+   * outline boxes are drawn *underneath* the dialog and the panel and chip can't
+   * be clicked or focused — the tool goes blind and dead at exactly the moment
+   * it scopes itself to the dialog.
+   *
+   * Only a shadow-including descendant of the topmost modal escapes that. The
+   * top layer alone is not enough: a popover shown after the dialog is still
+   * inert and still hit-tests below the backdrop, in both Chromium and Gecko.
+   * So while a native modal is open the tool moves house into the dialog, and
+   * moves back out when it closes.
+   *
+   * The boxes need no repositioning for this. draw() measures the layer host
+   * every frame and works relative to it, so the same arithmetic yields document
+   * coordinates in the normal case and viewport coordinates once the host is
+   * fixed inside the dialog — and draw() already re-runs on scroll, including
+   * scrolling inside the dialog, because the listener is a capturing one.
+   */
+  function syncModalHome() {
+    const target = on && isNativeModal(modalEl) ? modalEl : null;
+    const hosts = [layerHost, chipHost, panelHost].filter(Boolean);
+
+    if (target) {
+      for (const h of hosts) {
+        // Re-assert on every scan: a framework re-rendering its dialog will
+        // happily drop our nodes on the floor.
+        if (h.parentNode !== target) target.appendChild(h);
+      }
+      if (layerHost) layerHost.dataset.mode = 'modal';
+    } else {
+      for (const h of hosts) {
+        if (modalHome && h.parentNode === modalHome) mount(h);
+      }
+      if (layerHost) delete layerHost.dataset.mode;
+    }
+    modalHome = target;
   }
 
   function isOurs(el) {
@@ -193,7 +289,50 @@
   }
 
   /**
-   * @returns {'rendered'|'hidden'|'not-rendered'|'offscreen'}
+   * Layout position with every ancestor's scrolling added back, so it does not
+   * move when anything scrolls.
+   *
+   * getBoundingClientRect() is scroll-adjusted, so a heading sitting at a
+   * perfectly ordinary place inside a scrolled pane reports a negative top. Page
+   * scroll alone can't be subtracted back out: in the common app-shell layout
+   * (fixed chrome, `overflow:auto` main) the window never scrolls at all, so
+   * scrollY is 0 while the content underneath has moved hundreds of pixels. Only
+   * the sum over every scroll container tells a heading deliberately parked
+   * off-canvas from one the reader has simply scrolled past.
+   */
+  function layoutPosition(el) {
+    const r = el.getBoundingClientRect();
+    let left = r.left + scrollX;
+    let top = r.top + scrollY;
+    // The same flattened-tree climb closestFlattened makes, and it has to be the
+    // flattened one: a slotted heading renders inside the scroll containers of
+    // the component it lands in, not the ones around its light-DOM parent.
+    // documentElement and body are skipped because scrollX/scrollY above already
+    // account for page scroll.
+    for (
+      let n = el.assignedSlot || el.parentNode || el.host || null;
+      n;
+      n = n.assignedSlot || n.parentNode || n.host || null
+    ) {
+      if (n.nodeType !== 1 || n === document.documentElement || n === document.body) continue;
+      left += n.scrollLeft || 0;
+      top += n.scrollTop || 0;
+    }
+    return { left, top };
+  }
+
+  /**
+   * The split that matters here is the accessibility tree, not the screen.
+   * 'rendered' and 'sr-only' are both in the tree, so both are part of the
+   * outline a screen-reader user navigates and both belong in the panel.
+   * 'hidden' and 'not-rendered' are out of the tree: nothing announces them.
+   *
+   * Nothing here decides what gets *drawn*. Geometry changes on every scroll,
+   * and draw() already culls by viewport, so keeping geometry out of this
+   * classification is what stops a scrolled-away heading from vanishing from
+   * the outline as well as from the screen.
+   *
+   * @returns {'rendered'|'sr-only'|'hidden'|'not-rendered'}
    */
   function visibility(el) {
     let rects;
@@ -207,16 +346,106 @@
     const r = el.getBoundingClientRect();
     const style = getComputedStyle(el);
     if (style.visibility === 'hidden' || style.visibility === 'collapse') return 'hidden';
-    if (r.width <= 4 || r.height <= 4) return 'hidden';
 
-    // Absolute document coordinates, so we can tell an sr-only heading parked at
-    // left:-9999px from an ordinary heading below the fold.
-    const docLeft = r.left + scrollX;
-    const docTop = r.top + scrollY;
-    const docW = document.documentElement.scrollWidth;
-    if (docLeft + r.width < 0 || docTop + r.height < 0 || docLeft > docW) return 'offscreen';
+    // Clipped to nothing: the modern sr-only recipe (1px box plus overflow
+    // hidden or clip-path). Still announced, so it stays in the outline.
+    // Both dimensions have to be small. An empty heading is full-width and
+    // zero-height, and it is an ordinary rendered heading that happens to have
+    // no content, not a deliberately hidden one.
+    if (r.width <= 4 && r.height <= 4) return 'sr-only';
+
+    // Parked outside the document: the older sr-only recipe (left:-9999px).
+    // Only the negative side is tested. Layout coordinates inside a scroll
+    // container are never negative, so this can't fire on ordinary content,
+    // whereas comparing against the document width flagged every heading in a
+    // horizontally scrolling kanban board or wide table as screen-reader only.
+    // Parking an element to the *right* is a rare enough recipe to miss.
+    const pos = layoutPosition(el);
+    if (pos.left + r.width < 0 || pos.top + r.height < 0) return 'sr-only';
 
     return 'rendered';
+  }
+
+  /**
+   * Is this element a modal that takes over the accessibility tree?
+   *
+   * Both mechanisms make everything outside themselves unreachable to assistive
+   * tech, and neither sets an attribute the aria-hidden/inert check can see:
+   * showModal() gets its inertness implicitly from the top layer, and
+   * aria-modal="true" implicitly hides its siblings.
+   */
+  function isModal(el) {
+    // Cheap gate first: this runs on every element of every root.
+    const isDialogTag = el.localName === 'dialog';
+    if (!isDialogTag && el.getAttribute('aria-modal') !== 'true') return false;
+
+    if (isDialogTag) {
+      try {
+        // Also matches a fullscreen element, which takes over the tree the same way.
+        if (el.matches(':modal')) return true;
+      } catch (_) {
+        /* engine without :modal; fall through to the ARIA check */
+      }
+    }
+    // A <dialog open> that isn't modal, or a plain container, scopes nothing
+    // unless it claims modality to assistive tech itself.
+    if (el.getAttribute('aria-modal') !== 'true') return false;
+    const role = effectiveRole(el);
+    if (!isDialogTag && role !== 'dialog' && role !== 'alertdialog') return false;
+    // An aria-modal container that isn't rendered is a closed dialog.
+    try {
+      return el.getClientRects().length > 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function topmostModal(list) {
+    if (!list.length) return null;
+    // The native top layer is authoritative, so a showModal() dialog outranks an
+    // ARIA one. Within a tier the last in composed order is the best available
+    // guess at the most recently opened.
+    const native = list.filter((el) => {
+      try {
+        return el.matches(':modal');
+      } catch (_) {
+        return false;
+      }
+    });
+    const pool = native.length ? native : list;
+    return pool[pool.length - 1];
+  }
+
+  /**
+   * Alt text from images inside a heading, descending the flattened tree the
+   * same way composedText does. querySelectorAll stops dead at a shadow
+   * boundary, and an icon rendered by a child component is the common case.
+   */
+  function imageNames(node, depth = 0) {
+    if (depth > 64 || !node || node.nodeType !== 1) return '';
+    const el = /** @type {Element} */ (node);
+    let out = '';
+    if (
+      (el.localName === 'img' && el.hasAttribute('alt')) ||
+      (effectiveRole(el) === 'img' && el.hasAttribute('aria-label'))
+    ) {
+      out += ` ${(el.getAttribute('alt') || el.getAttribute('aria-label') || '').trim()}`;
+    }
+
+    if (el.localName === 'slot' && typeof el.assignedNodes === 'function') {
+      const assigned = el.assignedNodes({ flatten: true });
+      if (assigned.length) {
+        for (const n of assigned) out += imageNames(n, depth + 1);
+        return out;
+      }
+    }
+
+    // A host renders its shadow content; light children arrive through slots.
+    const sub = walker.shadowRootOf(el);
+    for (const child of sub ? sub.children : el.children) {
+      out += imageNames(child, depth + 1);
+    }
+    return out;
   }
 
   /**
@@ -226,20 +455,26 @@
    * violations.
    */
   function accName(el) {
-    const label = (el.getAttribute('aria-label') || '').trim();
-    if (label) return label;
-
+    // Spec order: aria-labelledby outranks aria-label, and every reference in
+    // the list contributes, joined by spaces — not just the first one that
+    // resolves. IDREFs don't cross shadow boundaries, so each is resolved
+    // against the heading's own root.
     const ref = el.getAttribute('aria-labelledby');
     if (ref) {
       const root = el.getRootNode();
-      for (const id of ref.split(/\s+/)) {
+      const parts = [];
+      for (const id of ref.trim().split(/\s+/)) {
         const t = root && root.getElementById ? root.getElementById(id) : null;
         if (t) {
           const txt = walker.composedText(t).replace(/\s+/g, ' ').trim();
-          if (txt) return txt;
+          if (txt) parts.push(txt);
         }
       }
+      if (parts.length) return parts.join(' ');
     }
+
+    const label = (el.getAttribute('aria-label') || '').trim();
+    if (label) return label;
 
     const text = walker.composedText(el).replace(/\s+/g, ' ').trim();
     if (text) return text;
@@ -247,40 +482,67 @@
     // An image with alt text gives the heading a name even with no text node.
     let imgAlt = '';
     try {
-      for (const img of el.querySelectorAll('img[alt], [role="img"][aria-label]')) {
-        imgAlt += (img.getAttribute('alt') || img.getAttribute('aria-label') || '').trim();
-      }
+      imgAlt = imageNames(el);
     } catch (_) {
       /* ignore */
     }
-    if (imgAlt.trim()) return imgAlt.trim();
+    if (imgAlt.trim()) return imgAlt.replace(/\s+/g, ' ').trim();
 
     return (el.getAttribute('title') || '').trim();
   }
 
+  /**
+   * Builds the outline: every heading in the accessibility tree, in reading
+   * order. This is deliberately the only list. It used to also filter by
+   * on-screen geometry, which meant a heading scrolled out of an `overflow:auto`
+   * pane was dropped from the outline entirely while still being counted, so the
+   * panel and the chip disagreed. Geometry belongs in draw(), which re-runs on
+   * every scroll and culls to the viewport there.
+   */
   function collect() {
     stats = emptyStats();
 
-    const { matches, truncated } = walker.walk({
-      match: (el) => !isOurs(el) && !!headingInfo(el),
+    // Modals are collected in the same pass rather than a second walk: this
+    // traversal already visits every element of every root, including the shadow
+    // roots a design-system dialog usually lives in.
+    //
+    // The heading cap is applied below rather than by walk(), so that dialogs
+    // never consume it. Letting them share the budget means a page at the cap
+    // can lose the open dialog and silently fail to scope the outline to it.
+    const { matches } = walker.walk({
+      match: (el) => !isOurs(el) && (!!headingInfo(el) || isModal(el)),
       skip: (el) => isOurs(el),
-      max: MAX_HEADINGS,
     });
-    stats.truncated = truncated;
 
-    // Two sequences in reading order. `seq` is every heading in the
-    // accessibility tree, used for the hierarchy checks. `out` is the subset
-    // that has drawable on-page geometry. display:none and aria-hidden/inert
-    // headings are in neither, but they're counted for the chip so a gap in a
-    // screenshot doesn't get read as a tool bug.
-    const seq = [];
-    const out = [];
-
+    const headings = [];
+    const modals = [];
     for (const m of matches) {
+      if (!headingInfo(m.element)) {
+        modals.push(m.element);
+      } else if (headings.length >= MAX_HEADINGS) {
+        stats.truncated = true;
+      } else {
+        headings.push(m);
+      }
+    }
+    modalEl = topmostModal(modals);
+
+    const seq = [];
+
+    for (const m of headings) {
       const info = headingInfo(m.element);
       stats.total++;
 
-      const hiddenAncestor = walker.closestComposed(
+      // With a modal open, everything behind it is out of the accessibility
+      // tree, so it is no more part of the reachable outline than an
+      // aria-hidden subtree is. Counted, so the drop in the outline is visible
+      // rather than looking like a tool bug.
+      if (modalEl && !walker.closestFlattened(m.element, (el) => el === modalEl)) {
+        stats.behindModal++;
+        continue;
+      }
+
+      const hiddenAncestor = walker.closestFlattened(
         m.element,
         (el) => el.getAttribute('aria-hidden') === 'true' || el.hasAttribute('inert')
       );
@@ -289,48 +551,50 @@
         continue;
       }
 
+      // display:none and visibility:hidden are out of the accessibility tree:
+      // nothing announces them, so they are not part of the outline. They're
+      // still counted, because a collapsed accordion or an inactive tab panel
+      // is full of headings an auditor wants to know exist.
       const vis = visibility(m.element);
       if (vis === 'not-rendered') {
         stats.notRendered++;
         continue;
       }
+      if (vis === 'hidden') {
+        stats.hidden++;
+        continue;
+      }
 
-      const item = {
+      if (vis === 'sr-only') stats.srOnly++;
+
+      seq.push({
         el: m.element,
         level: info.level,
         fromAria: info.fromAria,
-        hidden: vis === 'hidden',
-        offscreen: vis === 'offscreen',
+        srOnly: vis === 'sr-only',
+        name: accName(m.element),
         empty: accName(m.element) === '',
         hosts: m.hosts,
         closed: m.closed,
         problems: [],
-      };
-      seq.push(item);
-
-      if (vis === 'offscreen') {
-        stats.offscreen++;
-        continue;
-      }
-      if (vis === 'hidden') stats.hidden++;
-      out.push(item);
+      });
     }
 
-    validate(seq);
+    validate(seq, !!modalEl);
     for (const item of seq) {
       for (const code of item.problems) {
         if (PROBLEMS[code].tier === VIOLATION) stats.violations++;
         else stats.advisories++;
       }
     }
-    return out;
+    return seq;
   }
 
   /**
    * Runs the hierarchy checks over the reading-order sequence, tagging each
    * item's `problems` and recording page-level findings in `pageProblems`.
    */
-  function validate(seq) {
+  function validate(seq, scoped) {
     pageProblems = [];
     let h1s = 0;
     let prevLevel = 0;
@@ -340,14 +604,19 @@
       if (item.level === 1) h1s++;
 
       if (prevLevel === 0) {
-        if (item.level > 1) item.problems.push('first-not-h1');
+        // A dialog is a section of the page, not a document of its own, so
+        // opening at h2 is correct there. Flagging it would be a false positive
+        // on every well-built modal.
+        if (item.level > 1 && !scoped) item.problems.push('first-not-h1');
       } else if (item.level > prevLevel + 1) {
         item.problems.push('skipped');
       }
       prevLevel = item.level;
     }
 
-    if (seq.length) {
+    // Page-level h1 findings are about the page, and a modal is not one. Running
+    // them over a dialog's headings would report "no h1" on every dialog.
+    if (seq.length && !scoped) {
       if (h1s === 0) pageProblems.push('no-h1');
       else if (h1s > 1) pageProblems.push('multiple-h1');
     }
@@ -363,7 +632,7 @@
 
   function leafDescriptor(el) {
     let s = el.localName || 'element';
-    if (!/^h[1-6]$/.test(s) && (el.getAttribute('role') || '').includes('heading')) {
+    if (!/^h[1-6]$/.test(s) && effectiveRole(el) === 'heading') {
       s += '[role=heading]';
     }
     if (el.id) s += `#${el.id}`;
@@ -393,7 +662,7 @@
       text += ` ${middleTruncate(chainString(item), 48)}`;
     }
     if (item.fromAria) text += ' \u00b7aria';
-    if (item.hidden) text += ' \u00b7hidden';
+    if (item.srOnly) text += ' \u00b7sr-only';
     // A \u2715 for a violation, a \u26a0 for an advisory, then the short name of each
     // finding, so the box screenshot carries the defect on its own without the
     // sidebar.
@@ -416,8 +685,7 @@
   function record(item) {
     const flags = [];
     if (item.fromAria) flags.push('aria-level');
-    if (item.hidden) flags.push('visually hidden');
-    if (item.offscreen) flags.push('off-screen');
+    if (item.srOnly) flags.push('screen-reader only');
     const lines = [
       `H${item.level}${flags.length ? ` (${flags.join(', ')})` : ''}`,
       walker.composedText(item.el).replace(/\s+/g, ' ').trim().slice(0, 120),
@@ -443,6 +711,12 @@
     lines.push(`Heading outline: ${location.href}`);
     lines.push(new Date().toISOString());
     lines.push(countsLine());
+    if (modalEl) {
+      lines.push(
+        'SCOPE: a modal dialog is open, so this outline covers the dialog only. ' +
+          'Assistive tech cannot reach the page behind it.'
+      );
+    }
     if (!walker.canPierceClosed) {
       lines.push('WARNING: closed shadow roots were not traversed in this environment.');
     }
@@ -455,27 +729,72 @@
       const indent = '  '.repeat(Math.max(0, Math.min(item.level, 12) - 1));
       const flags = [];
       if (item.fromAria) flags.push('aria-level');
-      if (item.hidden) flags.push('hidden');
+      if (item.srOnly) flags.push('sr-only');
       for (const code of item.problems) {
         flags.push(`${PROBLEMS[code].tier === VIOLATION ? '✕' : '⚠'} ${PROBLEMS[code].short}`);
       }
       const text = walker.composedText(item.el).replace(/\s+/g, ' ').trim().slice(0, 80);
+      const shown = text || (item.name ? `${item.name.slice(0, 80)} (from label)` : '(no text)');
       lines.push(
-        `${indent}H${item.level}  ${text || '(no text)'}${flags.length ? `  [${flags.join(', ')}]` : ''}`
+        `${indent}H${item.level}  ${shown}${flags.length ? `  [${flags.join(', ')}]` : ''}`
       );
     }
     return lines.join('\n');
   }
 
+  /**
+   * Cross-origin frames this run almost certainly did not reach.
+   *
+   * Injection asks for allFrames, but activeTab grants host access for the tab's
+   * own origin only, so cross-origin frames are skipped and the per-frame
+   * denials never surface as an error anyone can catch. Staying quiet about that
+   * would make an audit tool under-report silently, which is the one failure
+   * mode it must not have. Counting the frames whose document we can't touch is
+   * the closest honest approximation available from inside the page.
+   */
+  function unreachableFrames() {
+    if (!isTopFrame()) return 0;
+    let n = 0;
+    let frames;
+    try {
+      frames = document.querySelectorAll('iframe, frame');
+    } catch (_) {
+      return 0;
+    }
+    for (const f of frames) {
+      try {
+        if (!f.contentDocument) n++;
+      } catch (_) {
+        n++;
+      }
+    }
+    return n;
+  }
+
+  // Reasons a heading was found but left out of the outline, in the order they're
+  // tested in collect(). Together with the outline count these sum to stats.total.
+  function exclusions() {
+    const out = [];
+    if (stats.behindModal) out.push(`${stats.behindModal} behind the modal`);
+    if (stats.ariaHidden) out.push(`${stats.ariaHidden} in aria-hidden`);
+    if (stats.notRendered) out.push(`${stats.notRendered} display:none`);
+    if (stats.hidden) out.push(`${stats.hidden} visibility:hidden`);
+    return out;
+  }
+
+  // The lead number is what the outline actually lists, so the count and the
+  // rows can never disagree. Anything found but not listed is named with its
+  // reason, and the parts add back up to every heading on the page.
   function countsLine() {
-    const parts = [`${stats.total} heading${stats.total === 1 ? '' : 's'}`];
+    const n = items.length;
+    const parts = [`${n} heading${n === 1 ? '' : 's'}`];
     if (stats.violations) parts.push(`\u2715 ${stats.violations} violation${stats.violations === 1 ? '' : 's'}`);
     const adv = stats.advisories + pageProblems.length;
     if (adv) parts.push(`\u26a0 ${adv} advisor${adv === 1 ? 'y' : 'ies'}`);
-    if (stats.hidden) parts.push(`${stats.hidden} hidden`);
-    if (stats.notRendered) parts.push(`${stats.notRendered} display:none`);
-    if (stats.offscreen) parts.push(`${stats.offscreen} off-screen`);
-    if (stats.ariaHidden) parts.push(`${stats.ariaHidden} in aria-hidden`);
+    if (stats.srOnly) parts.push(`incl. ${stats.srOnly} screen-reader only`);
+    parts.push(...exclusions());
+    const frames = unreachableFrames();
+    if (frames) parts.push(`${frames} cross-origin frame${frames === 1 ? '' : 's'} not covered`);
     if (stats.truncated) parts.push(`capped at ${MAX_HEADINGS}`);
     return parts.join(' \u00b7 ');
   }
@@ -551,7 +870,26 @@
         z-index: 2147483645 !important;
         forced-color-adjust: none;
       }
-      .layer { position: absolute; top: 0; left: 0; }
+      /* Set while the host lives inside an open modal dialog (see enterModal).
+         Fixed rather than absolute for two reasons: it re-anchors the boxes to
+         the viewport, which is the space the dialog's contents are measured in,
+         and a fixed child adds nothing to an ancestor's scrollable overflow, so
+         a full-size layer can't give the dialog its own scrollbars. */
+      :host([data-mode="modal"]) {
+        position: fixed !important;
+      }
+      /* Sized to the document and clipped, so a padded box overhanging a
+         full-width heading can't extend the page's scrollable area and add a
+         horizontal scrollbar to the very layout being audited. Clipping also
+         makes the measurement stable: our own boxes stop contributing to
+         scrollWidth, so reading it back doesn't creep. */
+      .layer {
+        position: absolute;
+        top: 0;
+        left: 0;
+        overflow: hidden;
+        overflow: clip;
+      }
       .box, .tag {
         position: absolute;
         top: 0;
@@ -567,8 +905,10 @@
         box-shadow: 0 0 0 1px rgba(255,255,255,0.95),
                     inset 0 0 0 1px rgba(255,255,255,0.95);
       }
-      .box[data-style="aria"]   { border-style: dashed; }
-      .box[data-style="hidden"] { border-style: dotted; }
+      .box[data-style="aria"]    { border-style: dashed; }
+      /* Dotted reads as "announced but not painted": the heading is in the
+         accessibility tree, there's just nothing on screen at this spot. */
+      .box[data-style="sr-only"] { border-style: dotted; }
       /* A flagged heading keeps its level color (still the load-bearing
          encoding) and gets a second ring: solid amber for an advisory, a
          heavier double red for a violation. It's redundant with the label's
@@ -837,6 +1177,7 @@
       .summary { font-size: 12px; color: var(--muted); }
       .summary .v { color: var(--flag-v); font-weight: 700; }
       .summary .a { color: var(--flag-a); font-weight: 700; }
+      .summary .scope { color: var(--fg); font-weight: 700; }
       .body { overflow: auto; flex: 1 1 auto; }
       ul { list-style: none; margin: 0; padding: 4px 0; }
       .row {
@@ -856,6 +1197,13 @@
       }
       .txt { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .txt.empty { color: var(--muted); font-style: italic; }
+      /* Named by a label or an icon rather than by its own text. */
+      .txt.named { font-style: italic; }
+      .srmark {
+        flex: none; color: var(--muted); border: 1px solid var(--line);
+        border-radius: 3px; padding: 0 4px;
+        font: 400 10px/1.6 ui-monospace, Menlo, monospace;
+      }
       .more { flex: none; color: var(--muted); font: 400 11px/1.5 ui-monospace, Menlo, monospace; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .rowflags { flex: none; font-size: 11px; font-weight: 700; white-space: nowrap; }
       .rowflags.violation { color: var(--flag-v); }
@@ -1076,7 +1424,7 @@
   // Hide the sidebar entirely while leaving the boxes and chip in place. This
   // removes the panel from view completely; the chip button and Alt+Shift+P
   // bring it back.
-  function setPanelHidden(v) {
+  function setPanelHidden(v, opts) {
     panelHidden = v;
     if (panelHost) panelHost.style.display = v ? 'none' : '';
     if (chipPanelBtn) {
@@ -1086,8 +1434,9 @@
         : 'Hide the panel, keep the boxes (Alt+Shift+P)';
     }
     // When the panel comes back, land focus on it so a keyboard user returns to
-    // the panel rather than being stranded on the body where they hid it.
-    if (!v && panelHost) {
+    // the panel rather than being stranded on the body where they hid it. Not on
+    // start(), though: opening the tool shouldn't yank focus off the page.
+    if (!v && panelHost && !(opts && opts.focus === false)) {
       const first = panelHost.shadowRoot.querySelector('header .iconbtn');
       if (first) first.focus();
     }
@@ -1148,11 +1497,41 @@
       s.textContent = text;
       return s;
     };
-    panelSummary.append(`${stats.total} heading${stats.total === 1 ? '' : 's'}`);
+    panelSummary.append(`${items.length} heading${items.length === 1 ? '' : 's'}`);
     if (stats.violations) panelSummary.append(' · ', colored('v', `✕ ${stats.violations}`));
     const adv = stats.advisories + pageProblems.length;
     if (adv) panelSummary.append(' · ', colored('a', `⚠ ${adv}`));
+    if (stats.srOnly) panelSummary.append(` · incl. ${stats.srOnly} screen-reader only`);
     if (!walker.canPierceClosed) panelSummary.append(' · open roots only');
+
+    // Always say why the list is shorter than the page. An unexplained short
+    // outline is exactly what makes the tool look like it's losing headings.
+    if (modalEl) {
+      panelSummary.append(
+        document.createElement('br'),
+        colored('scope', 'Scoped to the open dialog.'),
+        ' Assistive tech can’t reach the page behind it. Close it to outline the page.'
+      );
+    }
+    const excluded = exclusions();
+    if (excluded.length) {
+      panelSummary.append(
+        document.createElement('br'),
+        `${stats.total - items.length} more found, none of them in the accessibility tree: ${excluded.join(', ')}.`
+      );
+    }
+
+    const frames = unreachableFrames();
+    if (frames) {
+      panelSummary.append(
+        document.createElement('br'),
+        colored('a', '⚠'),
+        ` ${frames} cross-origin frame${frames === 1 ? '' : 's'} on this page. ` +
+          'Their headings are audited separately or not at all, and are never ' +
+          'listed here. Open a frame in its own tab to audit it.'
+      );
+    }
+
     for (const code of pageProblems) {
       panelSummary.append(
         document.createElement('br'),
@@ -1194,15 +1573,28 @@
 
       const txt = document.createElement('span');
       txt.className = 'txt';
+      // A heading can be named by a label or an icon's alt text and have no text
+      // of its own. Saying "(no text)" there contradicts the tool's own verdict
+      // that it isn't an empty heading, so show the name it actually computed.
       const name = walker.composedText(item.el).replace(/\s+/g, ' ').trim();
       if (name) {
         txt.textContent = name;
+      } else if (item.name) {
+        txt.classList.add('named');
+        txt.textContent = item.name;
       } else {
         txt.classList.add('empty');
         txt.textContent = '(no text)';
       }
 
       row.append(lvl, txt);
+
+      if (item.srOnly) {
+        const s = document.createElement('span');
+        s.className = 'srmark';
+        s.textContent = 'sr-only';
+        row.append(s);
+      }
 
       const more = panelMoreText(item);
       if (more) {
@@ -1223,11 +1615,15 @@
 
       // Accessible name for the row button: level, text, and any findings, as
       // one string so a screen-reader auditor hears the defect.
-      const aria = [`Heading level ${item.level}`, name || 'no text'];
+      const aria = [
+        `Heading level ${item.level}`,
+        name || (item.name ? `${item.name}, from its label` : 'no text'),
+      ];
       for (const c of item.problems) {
         aria.push(`${PROBLEMS[c].tier === VIOLATION ? 'violation' : 'advisory'}: ${PROBLEMS[c].short}`);
       }
       if (item.fromAria) aria.push('level from aria-level');
+      if (item.srOnly) aria.push('screen-reader only');
       row.setAttribute('aria-label', aria.join(', '));
       row.title = 'Scroll to this heading';
 
@@ -1289,10 +1685,20 @@
 
     // The layer is anchored at the document origin, but a positioned ancestor or
     // a body margin can offset where it actually landed, so measure it and take
-    // that out. Everything below is in document coordinates.
+    // that out. Everything below is in document coordinates — except inside an
+    // open dialog, where the host is pinned to the viewport and the same
+    // arithmetic yields viewport coordinates. draw() re-runs on scroll either way.
     const lr = layerHost.getBoundingClientRect();
     const originX = lr.left + scrollX;
     const originY = lr.top + scrollY;
+
+    // Match the clip region to whichever space we're drawing in. Inside a dialog
+    // the host is viewport-pinned and contributes nothing to document scroll, so
+    // it only needs to cover the culling window.
+    const clipW = modalHome ? innerWidth : document.documentElement.scrollWidth;
+    const clipH = modalHome ? innerHeight : document.documentElement.scrollHeight;
+    layer.style.width = `${clipW}px`;
+    layer.style.height = `${clipH}px`;
 
     for (const item of items) {
       const el = item.el;
@@ -1326,7 +1732,7 @@
       box.style.width = `${w}px`;
       box.style.height = `${h}px`;
       box.style.transform = `translate(${bx}px, ${by}px)`;
-      box.dataset.style = item.hidden ? 'hidden' : item.fromAria ? 'aria' : 'native';
+      box.dataset.style = item.srOnly ? 'sr-only' : item.fromAria ? 'aria' : 'native';
       if (tier) box.dataset.flag = tier;
       else box.removeAttribute('data-flag');
       box.style.display = '';
@@ -1359,6 +1765,10 @@
           ly = hit.b + 2;
         }
       }
+      // Keep the label inside the clip region. Sidestepping a collision can walk
+      // it rightwards, and past the edge it would now be clipped away entirely
+      // rather than merely overflowing.
+      lx = Math.max(0, Math.min(lx, clipW - tw));
       placed.push({ l: lx, t: ly, r: lx + tw, b: ly + th });
       tag.style.transform = `translate(${lx}px, ${ly}px)`;
 
@@ -1421,18 +1831,51 @@
 
   // ---------------------------------------------------------------- observing
 
+  /**
+   * Mutations the tool caused itself. Our three hosts are children of body, and
+   * the observer watches `style` and `class`, so hiding the panel or dragging
+   * its resize grip would otherwise schedule a full rescan of the page — and,
+   * during a drag, starve the debounce below for as long as the drag lasts.
+   */
+  function selfInflicted(records) {
+    for (const r of records) {
+      if (r.target && r.target.nodeType === 1 && isOurs(r.target)) continue;
+      if (r.type === 'childList') {
+        const nodes = [...r.addedNodes, ...r.removedNodes];
+        if (nodes.length && nodes.every((n) => n.nodeType === 1 && isOurs(n))) continue;
+      }
+      return false;
+    }
+    return true;
+  }
+
   // MutationObserver doesn't cross shadow boundaries, so every root needs one.
   function observeAll() {
     disconnectAll();
     const { roots } = walker.walk({ skip: (el) => isOurs(el) });
     for (const entry of roots) {
       try {
-        const mo = new MutationObserver(rescanSoon);
+        const mo = new MutationObserver((records) => {
+          if (!selfInflicted(records)) rescanSoon();
+        });
         mo.observe(entry.root, {
           childList: true,
           subtree: true,
           attributes: true,
-          attributeFilter: ['role', 'aria-level', 'aria-hidden', 'inert', 'hidden', 'class', 'style'],
+          // `open` and `aria-modal` are here because a dialog usually exists in
+          // the markup all along and only toggles an attribute to open, which
+          // changes the scope of the whole outline.
+          attributeFilter: [
+            'role',
+            'aria-level',
+            'aria-hidden',
+            'inert',
+            'hidden',
+            'open',
+            'aria-modal',
+            'class',
+            'style',
+          ],
         });
         observers.push(mo);
       } catch (_) {
@@ -1446,16 +1889,56 @@
     observers = [];
   }
 
+  /**
+   * Coalesce bursts of mutations, but never postpone indefinitely. A plain
+   * resetting debounce is starved forever by anything that mutates faster than
+   * the delay — a progress bar, a marquee, a scroll-driven style write — and the
+   * outline silently stops updating while the page keeps changing.
+   */
   function rescanSoon() {
     if (!on) return;
+    const now = Date.now();
+    if (!rescanDeadline) rescanDeadline = now + RESCAN_MAX_WAIT;
     clearTimeout(rescanTimer);
-    rescanTimer = setTimeout(() => {
-      if (!on) return;
-      items = collect();
-      observeAll();
+    rescanTimer = setTimeout(rescan, Math.max(0, Math.min(RESCAN_DEBOUNCE, rescanDeadline - now)));
+  }
+
+  /**
+   * True when two outlines are the same to the user. Used to skip re-rendering
+   * the panel on the periodic safety scan, which would otherwise throw away
+   * keyboard focus and the panel's scroll position every couple of seconds.
+   */
+  function sameOutline(a, b) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (
+        a[i].el !== b[i].el ||
+        a[i].level !== b[i].level ||
+        a[i].srOnly !== b[i].srOnly ||
+        a[i].empty !== b[i].empty ||
+        a[i].problems.join() !== b[i].problems.join()
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function rescan() {
+    rescanDeadline = 0;
+    if (!on) return;
+    const prev = items;
+    const prevModal = modalEl;
+    const prevPage = pageProblems.join();
+    items = collect();
+    // observeAll() every time: it is what picks up shadow roots that have
+    // appeared since the last scan.
+    observeAll();
+    syncModalHome();
+    if (!sameOutline(prev, items) || prevModal !== modalEl || prevPage !== pageProblems.join()) {
       renderPanel();
-      schedule();
-    }, 250);
+    }
+    schedule();
   }
 
   // ----------------------------------------------------------------- controls
@@ -1477,6 +1960,11 @@
     if (!on) return;
     if (e.key === 'Alt' || e.altKey) setAlt(true);
     if (e.key === 'Escape') {
+      // While a native dialog is open, Esc belongs to the dialog: the browser
+      // closes it, and swallowing that into "hide the panel" would dismiss our
+      // UI on a keystroke the user aimed at the page. A second Esc, once the
+      // dialog is gone, does the normal thing.
+      if (isNativeModal(modalEl)) return;
       // Progressive dismiss: first Esc hides the panel (boxes stay), so a user
       // who tabbed into the panel doesn't lose everything. A second Esc, or Esc
       // with the panel already hidden, closes the whole tool.
@@ -1519,9 +2007,12 @@
 
   // ---------------------------------------------------------------- lifecycle
 
+  function onWindowBlur() {
+    setAlt(false);
+  }
+
   function start() {
     on = true;
-    panelHidden = false;
     if (!layerHost) buildLayer();
     if (!chipHost) buildChip();
     if (!layerHost.isConnected) mount(layerHost);
@@ -1538,16 +2029,27 @@
       if (!panelHost.isConnected) mount(panelHost);
     }
 
+    // Restore the panel through setPanelHidden rather than just resetting the
+    // flag. off() leaves the inline display:none behind, so a tool that was
+    // closed with the panel hidden would come back believing the panel is shown
+    // while it is still invisible and the chip button still says "Show panel" —
+    // and the first click would then toggle it back to hidden, doing nothing.
+    setPanelHidden(false, { focus: false });
+
     items = collect();
     observeAll();
+    syncModalHome();
     renderPanel();
 
     addEventListener('scroll', schedule, true);
     addEventListener('resize', schedule, true);
     addEventListener('keydown', onKeyDown, true);
     addEventListener('keyup', onKeyUp, true);
-    addEventListener('blur', () => setAlt(false));
+    addEventListener('blur', onWindowBlur);
     layer.addEventListener('click', onLayerClick, true);
+
+    clearInterval(safetyTimer);
+    safetyTimer = setInterval(rescan, SAFETY_SCAN);
 
     loadMode();
     schedule();
@@ -1560,13 +2062,21 @@
     clearTimeout(rescanTimer);
     clearTimeout(flashTimer);
     clearTimeout(flashTimer2);
+    clearInterval(safetyTimer);
+    safetyTimer = 0;
+    rescanDeadline = 0;
     flashTimer = 0;
     disconnectAll();
     removeEventListener('scroll', schedule, true);
     removeEventListener('resize', schedule, true);
     removeEventListener('keydown', onKeyDown, true);
     removeEventListener('keyup', onKeyUp, true);
+    removeEventListener('blur', onWindowBlur);
     items = [];
+    modalEl = null;
+    // Move back out of any dialog before unmounting, so the next toggle starts
+    // from the body rather than from a dialog that may since have closed.
+    syncModalHome();
     if (layerHost && layerHost.isConnected) layerHost.remove();
     if (chipHost && chipHost.isConnected) chipHost.remove();
     if (panelHost && panelHost.isConnected) panelHost.remove();
@@ -1577,11 +2087,24 @@
       if (on) off();
       else start();
     },
+    // The toolbar drives every frame to the same state through this, so that a
+    // frame which appeared mid-session can't stay inverted relative to the rest.
+    set(v) {
+      if (v && !on) start();
+      else if (!v && on) off();
+    },
     get on() {
       return on;
     },
     get stats() {
       return { ...stats };
+    },
+    // The hosts relocate into an open dialog (see syncModalHome), where
+    // document.getElementById can't reach them — the dialog is usually inside a
+    // shadow root. Anything driving the tool from outside needs them by
+    // reference rather than by id.
+    get hosts() {
+      return { layer: layerHost, chip: chipHost, panel: panelHost };
     },
     outlineText,
   };

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fixture: dialog whose title is slotted in from light DOM</title>
+</head>
+<body>
+<h1>Page title</h1>
+<h2>Page section</h2>
+
+<!-- The standard web-component dialog shape: the component owns the <dialog> in
+     its shadow root and the consumer passes the title in as light DOM. The
+     title's light-DOM parent is <ui-dialog>, not the <dialog>, so a containment
+     test that climbs parentNode alone concludes the dialog's own title is
+     behind the dialog. -->
+<ui-dialog id="d">
+  <h2 slot="title">Slotted dialog title</h2>
+  <p slot="body">Body copy</p>
+</ui-dialog>
+
+<script type="module">
+  customElements.define(
+    'ui-dialog',
+    class extends HTMLElement {
+      connectedCallback() {
+        if (this.__done) return;
+        this.__done = true;
+        const root = this.attachShadow({ mode: 'open' });
+        root.innerHTML = `
+          <dialog id="dlg">
+            <slot name="title"></slot>
+            <h3>Shadow-side subheading</h3>
+            <slot name="body"></slot>
+          </dialog>`;
+        this.__dlg = root.getElementById('dlg');
+      }
+    }
+  );
+  window.openDialog = () => document.getElementById('d').__dlg.showModal();
+</script>
+</body>
+</html>

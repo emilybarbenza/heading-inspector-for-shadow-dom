@@ -41,6 +41,11 @@ Get the code first, either way works:
    is on the toolbar
 6. Select the icon, or press `Alt+Shift+H`, to toggle it on a tab
 
+To use it on a local file (`file://`), also open the extension's details and turn on
+**Allow access to file URLs** — it's off by default, and without it the icon does
+nothing on local pages. The extension shows a `!` badge with the reason whenever a
+click can't do anything, which also covers browser pages and the extension galleries.
+
 Load the extension through `chrome://extensions`, not the `--load-extension` command-line
 switch: Chrome 137+ ignores unpacked extensions passed on the command line.
 
@@ -73,12 +78,12 @@ Each heading gets an outlined box and a label.
 | --- | --- |
 | Solid border | Native `h1` to `h6` |
 | Dashed border, `·aria` | Level came from `aria-level`, or the element is `role="heading"` |
-| Dotted border, `·hidden` | Visually hidden but still in the accessibility tree |
+| Dotted border, `·sr-only` | Clipped or parked off-canvas, but still in the accessibility tree and still announced |
 | Border color | Level. It's redundant with the label text, so screenshots survive grayscale and CVD reviewers. |
 
 Colors are white-on-color at 5.9:1 minimum. Every box and label carries a 1px white ring so it stays legible on dark backgrounds. That's what keeps a defect screenshot usable.
 
-The chip at bottom-left reports counts, including the cases that can't be drawn in place: `display:none` headings have no geometry, off-screen headings are outside the viewport, and headings inside `aria-hidden` or `inert` subtrees are left out of annotation on purpose. They're still counted, so a heading missing from a screenshot doesn't get read as a tool bug.
+The chip at bottom-left leads with the number of headings in the outline, so it always equals the number of rows in the panel. Anything found but not listed is named with its reason after it — `4 headings · 2 display:none · 1 in aria-hidden` — and the parts add back up to every heading on the page. A heading is left out only when it isn't in the accessibility tree, which means one of: `display:none`, `visibility:hidden`, inside an `aria-hidden` or `inert` subtree, or behind an open modal. Nothing is ever left out for being scrolled out of view or drawn off-canvas.
 
 | Key | Action |
 | --- | --- |
@@ -96,7 +101,7 @@ The **Level + text / + Component / + Selector** control sets how much each row s
 
 Every control's tooltip shows on keyboard focus as well as hover (a native `title` only shows on hover, so keyboard users never saw it) and is wired with `aria-describedby` so a screen reader reads it too.
 
-The panel is the one part of the tool that is *not* `aria-hidden`, because an auditor who uses a screen reader or the keyboard has to be able to drive it. The cost is that it adds a landmark and focus stops to the page under test while it's open, so to audit the page's own tab order or screen-reader output, close the tool (`Esc`) first. The panel is top-frame only. Headings inside iframes get boxed in place but aren't listed, since a sidebar inside every iframe would be silly and cross-origin frames can't share the data anyway.
+The panel is the one part of the tool that is *not* `aria-hidden`, because an auditor who uses a screen reader or the keyboard has to be able to drive it. The cost is that it adds a landmark and focus stops to the page under test while it's open, so to audit the page's own tab order or screen-reader output, close the tool (`Esc`) first. The panel is top-frame only. Headings inside a *same-origin* iframe get boxed in place but aren't listed, since a sidebar inside every iframe would be silly. Cross-origin frames are a different matter: the tool asks to run in all frames, but `activeTab` grants host access for the tab's own origin only, so those frames are usually skipped entirely. The chip and the panel say how many are on the page, because silently auditing less than you appear to is the one thing an audit tool must never do. Open such a frame in its own tab to audit it.
 
 The panel sits over the right edge of the page instead of reflowing it. That's on purpose, since reflowing would change the layout you're auditing. Resize it by dragging its inner edge, or hide it entirely while keeping the boxes with the header's Hide button, `Alt+Shift+P`, or the chip, and bring it back the same way.
 
@@ -116,7 +121,9 @@ Findings come in two tiers, since an auditor files one as a defect and the other
 | More than one `h1` | Advisory | HTML allows it, but it weakens the top-level outline |
 | First heading deeper than `h1` | Advisory | Advisory |
 
-"Empty" is judged against an approximate accessible name, not raw text, so a heading named by `aria-label`, `aria-labelledby`, a captioned image, or `title` isn't a false positive. The hierarchy is computed over headings in the accessibility tree. `display:none`, `aria-hidden`, and `inert` headings are left out of the checks (and out of annotation), while off-screen and visually hidden ones still count.
+"Empty" is judged against an approximate accessible name, not raw text, so a heading named by `aria-label`, `aria-labelledby`, a captioned image, or `title` isn't a false positive. The hierarchy is computed over headings in the accessibility tree, which is the outline a screen-reader user actually navigates: `display:none`, `visibility:hidden`, `aria-hidden` and `inert` headings are out of the checks and out of the list, while screen-reader-only ones are in both. They're the headings that matter most on a visually heading-light design, and often the only structure there is.
+
+When a modal dialog is open, the outline scopes to the dialog and says so. Everything behind a modal is unreachable to assistive tech — `showModal()` gets that from the top layer, `aria-modal="true"` claims it directly — so listing those headings would describe an outline nobody can navigate. Scoping also keeps the checks honest: a dialog is a section of the page, not a document of its own, so the page-level `h1` rules and "first heading deeper than `h1`" are suspended while it's open, and a dialog that correctly opens at `h2` isn't reported as a defect. Skipped levels *inside* the dialog are still flagged.
 
 Violations get a heavier double-red ring on the box and a `✕` in the label and row. Advisories get a single amber ring and a `⚠`. The ring is redundant with the label text, so a grayscale or CVD screenshot still reads. The chip and the panel summary count each tier, and the copied record and copied outline cite the Success Criterion number and, where one exists, the equivalent axe rule.
 
@@ -193,24 +200,31 @@ The page-world tests run on both real Chromium and real Firefox. The
 extension-context test (six closed roots deep) is chromium-only, since
 Playwright can't load a temporary add-on into Firefox.
 
-`test/fixtures/deep-shadow.html` covers six closed roots nested one per level, open roots inside open roots, declarative shadow DOM, slotted headings that `textContent` can't see, `aria-level` overriding the tag, `role="heading"` with and without a level, `role="presentation"` on an `h3`, sr-only and off-screen and `display:none` and `visibility:hidden` headings, `aria-hidden` and `inert` subtrees, a same-origin frame with its own closed root, and a heading appended after load.
+`test/fixtures/deep-shadow.html` covers six closed roots nested one per level, open roots inside open roots, declarative shadow DOM, slotted headings that `textContent` can't see, `aria-level` overriding the tag, `role="heading"` with and without a level, `role="presentation"` on an `h3`, both sr-only recipes (a 1px clipped box and one parked at `left:-9999px`) plus `display:none` and `visibility:hidden` headings, `aria-hidden` and `inert` subtrees, a same-origin frame with its own closed root, and a heading appended after load.
+
+`test/fixtures/scroll-pane.html` is the app-shell layout — fixed chrome, one `overflow:auto` pane, and a window that never scrolls. It exists because the outline must not change when the page scrolls, and this is the layout where it silently did.
+
+`test/fixtures/modal.html` puts a `<dialog>` inside a shadow root, so modal detection has to go through the walker rather than a `querySelector`, which is where a real design-system dialog lives.
 
 The fixtures are worth as much as the code. Existing extensions fail at four levels deep because nobody had a fixture that went four levels deep.
 
 ## Structure
 
-`extension/walker.js` has no heading logic in it and is meant to be lifted out as a standalone package. It gives you composed-tree traversal, a `closest` that crosses shadow boundaries (`Element.closest` can't), and a text resolver that expands `<slot>` to its assigned nodes. Every tool that needs to see into shadow DOM needs this part. The heading annotator on top of it is the simpler half.
+`extension/walker.js` has no heading logic in it and is meant to be lifted out as a standalone package. It gives you composed-tree traversal, `closestFlattened` — a `closest` that crosses shadow boundaries, which `Element.closest` can't, and that follows `assignedSlot` so a slotted node is treated as living where it renders rather than where it's written — and a text resolver that expands `<slot>` to its assigned nodes. Every tool that needs to see into shadow DOM needs this part. The heading annotator on top of it is the simpler half.
 
 ## Known limitations
 
-- Slot-aware `aria-hidden` inheritance follows the composed ancestor chain, not the full flattened-tree semantics. A heading assigned to a slot inside an `aria-hidden` shadow subtree might not be classified as hidden.
-- Reading order is composed pre-order (host, then shadow content, then light children). Slotted light content is ordered at its light-DOM position, not its flattened slot position, so the outline order for slotted headings can differ from what's painted. Level-skip findings use that same order.
-- The hierarchy checks include visually-hidden and off-screen headings, since they're in the accessibility tree, but they don't try to model reading order across same-origin iframes. Each frame is audited on its own, and only the top frame's headings show up in the sidebar.
+- Reading order is composed pre-order (host, then shadow content, then light children). Slotted light content is ordered at its light-DOM position, not its flattened slot position, so the outline order for slotted headings can differ from what's painted, and level-skip findings use that same order. It shows up most on dialogs: a title passed in as `<h2 slot="title">` is listed after the shadow-side headings even though it paints first. The heading is found and checked either way — only its position in the list can disagree with the page.
+- The hierarchy checks include screen-reader-only headings, since they're in the accessibility tree, but they don't try to model reading order across same-origin iframes. Each frame is audited on its own, and only the top frame's headings show up in the sidebar.
+- Screen-reader-only headings are detected by geometry (clipped to a ~1px box, or laid out past the document's edge), which covers the standard recipes but not every one. `text-indent:-9999px` in particular leaves an ordinary box behind and reads as a normal heading. It's still listed and still checked — only the `·sr-only` marker is missed.
+- While a native `showModal()` dialog is open the tool relocates its own UI into the dialog, because the top layer paints above every `z-index` and inerts everything outside it — otherwise the boxes would be drawn under the dialog and the panel couldn't be clicked or focused. Being in the top layer is not enough on its own: a popover shown after the dialog is still inert in both Chromium and Gecko, so only a descendant of the dialog works. Two consequences. The hosts aren't reachable by `document.getElementById` while relocated, so use `window.__shadowHeadingOutliner.hosts` instead. And the tool briefly adds three nodes to the dialog's subtree, which a framework re-rendering that dialog may discard — the next scan puts them back.
+- Modal detection covers `showModal()`, fullscreen elements, and `aria-modal="true"` on a dialog role. A hand-rolled modal that only *looks* modal — an overlay div with no `aria-modal` and no `inert` on the background — isn't detected, and correctly so: it doesn't actually take over the accessibility tree, and the background headings really are still reachable. If several modals are open at once, the outline scopes to the topmost.
 - Selector chains aren't guaranteed unique. `querySelector` returns the first match at each hop.
-- Capped at 3000 headings per frame, reported in the chip when it hits the cap.
+- Capped at 3000 headings per frame, reported in the chip when it hits the cap. Dialogs don't count against that budget, so a page at the cap still scopes correctly to an open modal.
+- A rescan runs on mutation, and on a 1.5s timer as a backstop. The timer is there because a custom element already present in the markup can be upgraded at any time: its `connectedCallback` attaches a shadow root and fills it, all inside a root nothing is observing yet, so no mutation fires anywhere. Design systems that load their definitions asynchronously do this on every page load.
 - The boxes are positioned in document coordinates so they scroll with the page. A heading inside a `position:fixed` or `sticky` container can judder during active scrolling, since the box scrolls with the content and then snaps back to the fixed spot on the next redraw. Its resting position is correct.
 - A full page navigation drops the overlay. Toggle it again. That's the cost of `activeTab` instead of blanket host permissions, which is the right trade for a tool that gets run against customer sites under a security review.
-- The bookmarklet build is now past ~64KB, which some non-Chromium browsers truncate. Chrome and Edge are the closed-root targets and they handle it fine, and the build still prints the warning so the limit is never a silent surprise.
+- The bookmarklet is around 56KB, under the ~64KB some non-Chromium browsers truncate at. The build fails (not warns) past 60KB, so growing out of the limit stops a release instead of silently shipping a truncated, syntactically broken bookmarklet. CSS comments are stripped from that build for the same reason — they'd be a couple of KB of prose inside a length-limited URL.
 
 ## License
 

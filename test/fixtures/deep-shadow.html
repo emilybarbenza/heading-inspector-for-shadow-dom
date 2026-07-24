@@ -47,6 +47,16 @@
 <div aria-hidden="true"><h2>Inside aria-hidden, counted but not annotated</h2></div>
 <div inert><h2>Inside inert, counted but not annotated</h2></div>
 
+<!-- Slotted into an aria-hidden subtree of a shadow root. Its light-DOM parent
+     is the host, so only a flattened-tree climb sees the aria-hidden wrapper. -->
+<slot-hidden><h2 slot="c">Slotted into an aria-hidden shadow subtree</h2></slot-hidden>
+
+<!-- Headings whose text or name is rendered by a child component. Reading only
+     the light children reports these as empty, which is a fabricated violation. -->
+<h2><title-part></title-part></h2>
+<h2><icon-part></icon-part></h2>
+<h2><i><i><i><i><i><i><i><i><i><i><i><i><i><i><i>Deeply wrapped title</i></i></i></i></i></i></i></i></i></i></i></i></i></i></i></h2>
+
 <!-- Hierarchy findings the validator should flag. -->
 <h2>A section heading, level 2</h2>
 <h4>Skips straight to level 4 (skipped-level advisory)</h4>
@@ -88,6 +98,42 @@
           <slot name="content"></slot>
           <inner-open></inner-open>
         `;
+      }
+    }
+  );
+
+  // Heading text supplied by a nested component, and by an icon's alt text.
+  customElements.define(
+    'title-part',
+    class extends HTMLElement {
+      connectedCallback() {
+        if (this.__done) return;
+        this.__done = true;
+        this.attachShadow({ mode: 'open' }).innerHTML = '<span>Text from a child component</span>';
+      }
+    }
+  );
+
+  customElements.define(
+    'icon-part',
+    class extends HTMLElement {
+      connectedCallback() {
+        if (this.__done) return;
+        this.__done = true;
+        this.attachShadow({ mode: 'open' }).innerHTML =
+          '<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="Named by an icon">';
+      }
+    }
+  );
+
+  customElements.define(
+    'slot-hidden',
+    class extends HTMLElement {
+      connectedCallback() {
+        if (this.__done) return;
+        this.__done = true;
+        this.attachShadow({ mode: 'open' }).innerHTML =
+          '<div aria-hidden="true"><slot name="c"></slot></div>';
       }
     }
   );

@@ -6,6 +6,10 @@ import { tmpdir } from 'node:os';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const fixture = pathToFileURL(join(root, 'test/fixtures/deep-shadow.html')).href;
+const scrollFixture = pathToFileURL(join(root, 'test/fixtures/scroll-pane.html')).href;
+const modalFixture = pathToFileURL(join(root, 'test/fixtures/modal.html')).href;
+const slottedModalFixture = pathToFileURL(join(root, 'test/fixtures/modal-slotted.html')).href;
+const wideFixture = pathToFileURL(join(root, 'test/fixtures/wide-scroller.html')).href;
 
 const walkerSrc = await readFile(join(root, 'extension/walker.js'), 'utf8');
 const overlaySrc = await readFile(join(root, 'extension/overlay.js'), 'utf8');
@@ -48,6 +52,43 @@ test.describe('page world (bookmarklet equivalent)', () => {
     // Composed pre-order: the main-document h1 is the first match, not buried
     // after the open-root headings the way the old LIFO stack returned them.
     expect(found[0].text).toContain('Level 1 in the main document');
+  });
+
+  test('a heading slotted into an aria-hidden shadow subtree is excluded', async ({ page }) => {
+    await page.goto(fixture);
+    await page.evaluate(walkerSrc);
+    await page.evaluate(overlaySrc);
+    await page.waitForTimeout(600);
+
+    const r = await page.evaluate(() => ({
+      outline: window.__shadowHeadingOutliner.outlineText(),
+      ariaHidden: window.__shadowHeadingOutliner.stats.ariaHidden,
+    }));
+    // Its light-DOM parent is the host, so climbing parentNode alone never sees
+    // the aria-hidden wrapper it actually renders inside.
+    expect(r.outline).not.toContain('Slotted into an aria-hidden shadow subtree');
+    expect(r.ariaHidden).toBeGreaterThanOrEqual(3);
+  });
+
+  test('text rendered by a child component is not a fabricated empty heading', async ({ page }) => {
+    await page.goto(fixture);
+    await page.evaluate(walkerSrc);
+    await page.evaluate(overlaySrc);
+    await page.waitForTimeout(600);
+
+    const r = await page.evaluate(() => ({
+      outline: window.__shadowHeadingOutliner.outlineText(),
+      violations: window.__shadowHeadingOutliner.stats.violations,
+    }));
+
+    // textContent is '' for all three, so reading only the light children would
+    // report each as an empty-heading VIOLATION against WCAG 1.3.1 and 2.4.6 —
+    // on exactly the component-built markup this tool exists for.
+    expect(r.outline).toContain('Text from a child component');
+    expect(r.outline).toContain('Named by an icon');
+    expect(r.outline).toContain('Deeply wrapped title');
+    // Still exactly one real empty heading in the fixture.
+    expect(r.violations).toBe(1);
   });
 
   test('boxes scroll with the page and the panel can be hidden on its own', async ({ page }) => {
@@ -185,6 +226,288 @@ test.describe('page world (bookmarklet equivalent)', () => {
 });
 
 /**
+ * The outline is the accessibility tree, and nothing about where the page
+ * happens to be scrolled may change it. Geometry only decides what gets drawn.
+ */
+test.describe('outline is independent of scroll position', () => {
+  const readCounts = (page) =>
+    page.evaluate(() => ({
+      total: window.__shadowHeadingOutliner.stats.total,
+      rows: document.getElementById('sho-panel-host').shadowRoot.querySelectorAll('.row').length,
+      srOnly: window.__shadowHeadingOutliner.stats.srOnly,
+      boxes: [...document.getElementById('sho-layer-host').shadowRoot.querySelectorAll('.box')].filter(
+        (b) => b.style.display !== 'none'
+      ).length,
+      windowScroll: window.scrollY,
+    }));
+
+  test('headings scrolled out of an inner pane stay listed', async ({ page }) => {
+    await page.setViewportSize({ width: 900, height: 500 });
+    await page.goto(scrollFixture);
+
+    // Scroll the pane BEFORE switching the tool on, which is what happens when
+    // someone reading mid-document clicks the toolbar button. The window never
+    // scrolls in this layout, so scrollY stays 0 while the content has moved:
+    // headings above the pane's top used to be read as parked off-canvas and
+    // dropped from the outline while still being counted.
+    await page.evaluate(() => {
+      document.getElementById('pane').scrollTop = 2000;
+      // The same situation one shadow boundary away, reachable only via assignedSlot.
+      window.scrollShadowPane(1200);
+    });
+    await page.evaluate(walkerSrc);
+    await page.evaluate(overlaySrc);
+    await page.waitForTimeout(300);
+
+    const scrolled = await readCounts(page);
+    expect(scrolled.windowScroll).toBe(0);
+    expect(scrolled.total).toBe(8);
+    expect(scrolled.rows).toBe(8);
+    // A slotted heading renders inside its slot's scroll containers, not its
+    // light-DOM parent's, so the position climb has to follow assignedSlot too.
+    // Missing that reads it as parked off-canvas and badges it screen-reader only.
+    expect(scrolled.srOnly).toBe(0);
+    // Only the headings near the viewport are drawn. That's draw()'s culling
+    // doing its job, and it must not feed back into the list above.
+    expect(scrolled.boxes).toBeLessThan(scrolled.rows);
+
+    // A rescan while still scrolled must reach the same answer.
+    await page.evaluate(() => document.getElementById('last').setAttribute('class', 'poke'));
+    await page.waitForTimeout(500);
+    const rescanned = await readCounts(page);
+    expect(rescanned.rows).toBe(8);
+    expect(rescanned.total).toBe(8);
+
+    // And back at the top, where nothing was ever wrong.
+    await page.evaluate(() => {
+      document.getElementById('pane').scrollTop = 0;
+    });
+    await page.evaluate(() => document.getElementById('last').setAttribute('class', 'poke2'));
+    await page.waitForTimeout(500);
+    expect((await readCounts(page)).rows).toBe(8);
+  });
+
+  test('wide horizontally scrolled content is not mistaken for screen-reader only', async ({ page }) => {
+    await page.setViewportSize({ width: 900, height: 600 });
+    await page.goto(wideFixture);
+    await page.evaluate(() => {
+      document.getElementById('board').scrollLeft = 1400;
+    });
+    await page.evaluate(walkerSrc);
+    await page.evaluate(overlaySrc);
+    await page.waitForTimeout(300);
+
+    const r = await page.evaluate(() => {
+      const sr = document.getElementById('sho-panel-host').shadowRoot;
+      return {
+        rows: [...sr.querySelectorAll('.row')].map((x) => x.querySelector('.txt').textContent),
+        srMarked: [...sr.querySelectorAll('.row')].filter((x) => x.querySelector('.srmark')).length,
+        srOnly: window.__shadowHeadingOutliner.stats.srOnly,
+      };
+    });
+    // Columns past the document's width are laid out at x > document.scrollWidth
+    // but are perfectly ordinary visible headings.
+    expect(r.rows).toHaveLength(7);
+    expect(r.srOnly).toBe(0);
+    expect(r.srMarked).toBe(0);
+  });
+
+  test('the chip count always equals the number of rows', async ({ page }) => {
+    await page.goto(fixture);
+    await page.evaluate(walkerSrc);
+    await page.evaluate(overlaySrc);
+    await page.waitForTimeout(600);
+
+    const { lead, rows } = await page.evaluate(() => {
+      const chip = document.getElementById('sho-chip-host').shadowRoot.querySelector('.counts');
+      return {
+        lead: Number(/^(\d+)/.exec(chip.textContent)[1]),
+        rows: document.getElementById('sho-panel-host').shadowRoot.querySelectorAll('.row').length,
+      };
+    });
+    expect(lead).toBe(rows);
+  });
+});
+
+/**
+ * A modal takes over the accessibility tree, so the outline has to follow it
+ * there rather than listing headings nobody can reach.
+ */
+test.describe('modal dialog scoping', () => {
+  // While a native dialog is open the tool relocates into it, so the hosts are
+  // no longer reachable by id — the dialog is usually inside a shadow root.
+  const snapshot = (page) =>
+    page.evaluate(() => {
+      const panel = window.__shadowHeadingOutliner.hosts.panel;
+      return {
+        stats: window.__shadowHeadingOutliner.stats,
+        outline: window.__shadowHeadingOutliner.outlineText(),
+        rows: [...panel.shadowRoot.querySelectorAll('.row')].map((r) => r.querySelector('.txt').textContent),
+        summary: panel.shadowRoot.querySelector('.summary').textContent,
+      };
+    });
+
+  test('scopes to an open dialog and counts what it hides', async ({ page }) => {
+    await page.goto(modalFixture);
+    await page.evaluate(walkerSrc);
+    await page.evaluate(overlaySrc);
+    await page.waitForTimeout(300);
+
+    const before = await snapshot(page);
+    expect(before.stats.behindModal).toBe(0);
+    expect(before.rows).toContain('Page title');
+    expect(before.rows).not.toContain('Dialog title');
+
+    await page.evaluate(() => window.openDialog());
+    await page.waitForTimeout(500); // past the 250ms rescan debounce
+
+    const open = await snapshot(page);
+    // The dialog is in a shadow root, so finding it at all exercises the walker.
+    expect(open.rows).toEqual(['Dialog title', 'Dialog detail, skipping level three']);
+    expect(open.stats.behindModal).toBe(4);
+    expect(open.stats.total).toBe(6);
+    expect(open.summary).toContain('Scoped to the open dialog');
+    expect(open.outline).toContain('SCOPE:');
+
+    // Real findings inside the dialog still surface: h2 -> h4 is a skipped level.
+    expect(open.outline).toContain('skipped level');
+    // Page-level h1 rules are about the page, not a dialog. A dialog opening at
+    // h2 with no h1 is correct and must not be reported.
+    expect(open.outline).not.toContain('no h1');
+    expect(open.outline).not.toContain('starts below h1');
+
+    // Closing it puts the page back.
+    await page.evaluate(() => window.closeDialog());
+    await page.waitForTimeout(500);
+    const after = await snapshot(page);
+    expect(after.stats.behindModal).toBe(0);
+    expect(after.rows).toContain('Page title');
+    expect(after.rows).not.toContain('Dialog title');
+  });
+
+  test('a dialog title slotted in from light DOM counts as inside the dialog', async ({ page }) => {
+    await page.goto(slottedModalFixture);
+    await page.evaluate(walkerSrc);
+    await page.evaluate(overlaySrc);
+    await page.waitForTimeout(300);
+
+    await page.evaluate(() => window.openDialog());
+    await page.waitForTimeout(500);
+
+    const open = await snapshot(page);
+    // The title's light-DOM parent is <ui-dialog>, so only a flattened-tree
+    // climb (through assignedSlot) finds the <dialog> it actually renders in.
+    // Getting this wrong hides the dialog's own title, which is the one heading
+    // scoping to the dialog exists to show.
+    expect(open.rows).toContain('Slotted dialog title');
+    expect(open.rows).toContain('Shadow-side subheading');
+    expect(open.stats.behindModal).toBe(2);
+  });
+
+  test('the tool stays visible and operable while a native dialog is open', async ({ page }) => {
+    await page.setViewportSize({ width: 1000, height: 700 });
+    await page.goto(slottedModalFixture);
+    await page.evaluate(walkerSrc);
+    await page.evaluate(overlaySrc);
+    await page.waitForTimeout(300);
+    await page.evaluate(() => window.openDialog());
+    await page.waitForTimeout(600);
+
+    const r = await page.evaluate(() => {
+      // Resolve through shadow roots to whatever is really painted on top.
+      const deepAt = (x, y) => {
+        let n = document.elementFromPoint(x, y);
+        for (let i = 0; n && n.shadowRoot && i < 20; i++) {
+          const inner = n.shadowRoot.elementFromPoint(x, y);
+          if (!inner || inner === n) break;
+          n = inner;
+        }
+        return n;
+      };
+      const hosts = window.__shadowHeadingOutliner.hosts;
+      const pr = hosts.panel.getBoundingClientRect();
+      const cr = hosts.chip.getBoundingClientRect();
+      const btn = [...hosts.panel.shadowRoot.querySelectorAll('.iconbtn')].find(
+        (b) => b.textContent === 'Copy outline'
+      );
+      btn.focus();
+      const boxes = [...hosts.layer.shadowRoot.querySelectorAll('.box')].filter(
+        (b) => b.style.display !== 'none'
+      );
+      return {
+        // A showModal() dialog paints above every z-index and inerts everything
+        // outside itself, so both of these fail unless the tool has moved into
+        // the dialog's own subtree.
+        panelOnTop: hosts.panel.shadowRoot.contains(deepAt(pr.left + 20, pr.top + 60)),
+        chipOnTop: hosts.chip.shadowRoot.contains(deepAt(cr.left + 10, cr.top + 10)),
+        panelFocusable: hosts.panel.shadowRoot.activeElement === btn,
+        boxesDrawn: boxes.length,
+      };
+    });
+
+    expect(r.panelOnTop).toBe(true);
+    expect(r.chipOnTop).toBe(true);
+    expect(r.panelFocusable).toBe(true);
+    expect(r.boxesDrawn).toBe(2);
+
+    // Closing the dialog moves the tool back out to the body, where it is
+    // reachable by id again.
+    await page.evaluate(() => document.getElementById('d').__dlg.close());
+    await page.waitForTimeout(600);
+    const home = await page.evaluate(() => ({
+      backInBody: document.getElementById('sho-panel-host') !== null,
+      layerMode: document.getElementById('sho-layer-host').dataset.mode,
+    }));
+    expect(home.backInBody).toBe(true);
+    expect(home.layerMode).toBeUndefined();
+  });
+});
+
+/**
+ * The shipped bookmarklet, not the sources it is built from. Nothing else runs
+ * the minified, percent-encoded artifact — CI builds it and throws it away — so
+ * a minification or escaping regression would reach GitHub Pages unnoticed.
+ */
+test.describe('built bookmarklet', () => {
+  test('the generated artifact runs and outlines the page', async ({ page }) => {
+    const txt = join(root, 'dist/bookmarklet.txt');
+    let raw;
+    try {
+      raw = await readFile(txt, 'utf8');
+    } catch (_) {
+      test.skip(true, 'run `npm run build:bookmarklet` first');
+      return;
+    }
+
+    expect(raw.startsWith('javascript:')).toBe(true);
+    // A browser percent-decodes the URL before running it, so decoding here is
+    // what the address bar would hand to the JS engine.
+    const source = decodeURIComponent(raw.slice('javascript:'.length));
+
+    await page.goto(fixture);
+    await page.evaluate(source);
+    await page.waitForTimeout(400);
+
+    const r = await page.evaluate(() => {
+      const api = window.__shadowHeadingOutliner;
+      return {
+        mounted: !!api && api.on,
+        rows: api.hosts.panel.shadowRoot.querySelectorAll('.row').length,
+        outline: api.outlineText(),
+      };
+    });
+    expect(r.mounted).toBe(true);
+    expect(r.rows).toBeGreaterThan(0);
+    expect(r.outline).toContain('Level 1 in the main document');
+
+    // Re-running toggles it off: that idiom is how the bookmarklet works.
+    await page.evaluate(source);
+    await page.waitForTimeout(200);
+    expect(await page.evaluate(() => window.__shadowHeadingOutliner.on)).toBe(false);
+  });
+});
+
+/**
  * Extension context. This is the test that matters: six closed roots deep.
  */
 test.describe('extension context', () => {
@@ -271,8 +594,16 @@ test.describe('extension context', () => {
 
     const stats = await inTool('stats');
     expect(stats.notRendered).toBeGreaterThan(0);
-    expect(stats.offscreen).toBeGreaterThan(0);
     expect(stats.ariaHidden).toBeGreaterThanOrEqual(2);
+    // Both sr-only recipes in the fixture (a 1px clip-path box and one parked at
+    // left:-9999px). They're announced, so they belong in the outline, not in
+    // the excluded counts.
+    expect(stats.srOnly).toBe(2);
+    expect(outline).toContain('Visually hidden, still in the accessibility tree');
+    expect(outline).toContain('Parked off-screen at left:-9999px');
+    // visibility:hidden is not in the accessibility tree, so it is counted only.
+    expect(stats.hidden).toBe(1);
+    expect(outline).not.toContain('Visibility hidden');
 
     // role=presentation on an h3 must not count as a heading.
     expect(outline).not.toContain('role=presentation');

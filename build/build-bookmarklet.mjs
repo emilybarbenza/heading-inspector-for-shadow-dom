@@ -34,7 +34,24 @@ const { code } = await transform(wrapped, {
   legalComments: 'none',
   target: 'es2020',
 });
-const bookmarklet = `javascript:${encodeURIComponent(code)}`;
+
+// The overlay's CSS lives in template literals, which esbuild can't see into,
+// so its comments survive minification and ship inside a URL that has a size
+// ceiling — a couple of KB of prose nobody will ever read. Every /* */ left in
+// the minified bundle is necessarily inside one of those style strings, because
+// esbuild has already removed the real JS comments. Parsing the result guards
+// the assumption: if a future string literal ever contains /* */ and this strip
+// mangles it, the build fails here instead of shipping a broken bookmarklet.
+const lean = code.replace(/\/\*[\s\S]*?\*\//g, '');
+try {
+  // eslint-disable-next-line no-new-func -- parse check only; never executed.
+  new Function(lean);
+} catch (err) {
+  console.error('ERROR: stripping CSS comments corrupted the bundle:', err.message);
+  process.exit(1);
+}
+
+const bookmarklet = `javascript:${encodeURIComponent(lean)}`;
 
 await mkdir(outDir, { recursive: true });
 await writeFile(join(outDir, 'bookmarklet.txt'), bookmarklet, 'utf8');
@@ -61,7 +78,9 @@ const page = `<!doctype html>
 the chip says <code>open roots only</code> when that is the case. Use the extension
 when you need closed roots.</p>
 <h2>Keys</h2>
-<p><code>esc</code> close &middot; <code>alt+shift+m</code> cycle label detail &middot;
+<p><code>esc</code> hide the panel; again to close the tool &middot;
+<code>alt+shift+p</code> hide or show the panel &middot;
+<code>alt+shift+m</code> cycle label detail &middot;
 <code>alt+shift+c</code> copy the outline as text &middot; <code>alt+click</code> a box to copy
 that heading's selector chain.</p>
 </body>
@@ -72,6 +91,12 @@ await writeFile(join(outDir, 'bookmarklet.html'), page, 'utf8');
 
 console.log(`dist/bookmarklet.txt   ${bookmarklet.length} chars`);
 console.log('dist/bookmarklet.html  drag-to-install page');
+// Fail, don't warn. CI runs this build, and a console.warn leaves the exit code
+// at 0 — so a source file growing past the limit would ship a truncated,
+// syntactically broken bookmarklet to GitHub Pages through a green pipeline.
 if (bookmarklet.length > 60000) {
-  console.warn('WARNING: some browsers truncate bookmarklets past ~64KB.');
+  console.error(
+    `ERROR: bookmarklet is ${bookmarklet.length} chars; some browsers truncate past ~64KB.`
+  );
+  process.exitCode = 1;
 }

@@ -61,32 +61,49 @@
   }
 
   /**
-   * Walks up the composed tree, crossing shadow boundaries via ShadowRoot.host.
+   * Walks up the flattened tree, crossing shadow boundaries via ShadowRoot.host.
    * Element.closest() can't do this.
+   *
+   * assignedSlot comes first because a slotted node's flattened-tree parent is
+   * the slot it lands in, not its light-DOM parent. Climbing parentNode alone
+   * walks back out to the light DOM and never sees the component the node is
+   * actually rendered inside, which is how a dialog title passed in as
+   * `<h2 slot="title">` reads as being outside the dialog that displays it.
    *
    * @param {Node} node
    * @param {(el: Element) => boolean} predicate
    * @returns {Element|null} the matching ancestor, or null
    */
-  function closestComposed(node, predicate) {
+  function closestFlattened(node, predicate) {
     let n = node;
     while (n) {
       if (n.nodeType === 1 && predicate(/** @type {Element} */ (n))) return n;
-      n = n.parentNode || n.host || null;
+      n = n.assignedSlot || n.parentNode || n.host || null;
     }
     return null;
   }
 
   /**
-   * Resolves the text a user would actually see, expanding <slot> elements to
-   * their assigned nodes. Plain textContent returns '' for slotted content.
+   * Resolves the text a user would actually see, walking the flattened tree:
+   * <slot> elements expand to their assigned nodes, and a host element resolves
+   * to its shadow content. Plain textContent returns '' for both.
+   *
+   * The shadow-root case is the one that matters most here. A heading whose text
+   * is rendered by a child component — `<h2><x-title></x-title></h2>` — has no
+   * text of its own, and reading only its light children reports it as empty.
+   * That turns a perfectly good heading into a fabricated empty-heading
+   * violation, on exactly the component-built pages this tool exists for.
+   *
+   * The depth cap is a runaway guard, not a budget: it is set far above any real
+   * markup, because returning '' partway through means "no accessible name",
+   * which is the same false violation by another route.
    *
    * @param {Node} node
    * @param {number} depth
    * @returns {string}
    */
   function composedText(node, depth = 0) {
-    if (depth > 12) return '';
+    if (depth > 64) return '';
     if (node.nodeType === 3) return node.nodeValue || '';
     if (node.nodeType !== 1) return '';
 
@@ -97,6 +114,16 @@
         return assigned.map((n) => composedText(n, depth + 1)).join('');
       }
     }
+
+    // A host renders its shadow content, not its light children — those only
+    // appear where a <slot> pulls them in, which the branch above handles.
+    const sub = shadowRootOf(el);
+    if (sub) {
+      let shadow = '';
+      for (const child of sub.childNodes) shadow += composedText(child, depth + 1);
+      return shadow;
+    }
+
     let out = '';
     for (const child of el.childNodes) out += composedText(child, depth + 1);
     return out;
@@ -162,5 +189,5 @@
     return { matches, roots, truncated };
   }
 
-  window[KEY] = { walk, shadowRootOf, closestComposed, composedText, canPierceClosed };
+  window[KEY] = { walk, shadowRootOf, closestFlattened, composedText, canPierceClosed };
 })();

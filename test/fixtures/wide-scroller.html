@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fixture: horizontally scrolling wide content</title>
+<style>
+  body { margin: 0; }
+  /* A kanban board: content laid out far wider than the document, scrolled
+     sideways. Layout positions here run well past document.scrollWidth without
+     anything being hidden. */
+  .board { display: flex; gap: 20px; overflow-x: auto; width: 900px; }
+  .col { flex: 0 0 400px; }
+</style>
+</head>
+<body>
+<h1>Board</h1>
+<div class="board" id="board">
+  <div class="col"><h2>Column one</h2><p>a</p></div>
+  <div class="col"><h2>Column two</h2><p>b</p></div>
+  <div class="col"><h2>Column three</h2><p>c</p></div>
+  <div class="col"><h2>Column four</h2><p>d</p></div>
+  <div class="col"><h2>Column five</h2><p>e</p></div>
+  <div class="col"><h2>Column six</h2><p>f</p></div>
+</div>
+</body>
+</html>

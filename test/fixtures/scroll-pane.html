@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fixture: headings inside an inner scroll container</title>
+<style>
+  /* The app-shell layout: fixed chrome, one scrolling pane. The window itself
+     never scrolls, so window.scrollY stays 0 no matter how far the reader has
+     gone through the content. */
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  .shell { display: flex; height: 100vh; }
+  nav { width: 180px; border-right: 1px solid #ccc; }
+  main { flex: 1; overflow-y: auto; padding: 20px; }
+  section { height: 420px; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <nav>sidebar</nav>
+  <main id="pane">
+    <h1>Pane heading one</h1>
+    <section>a</section>
+    <h2>Pane heading two</h2>
+    <section>b</section>
+    <h2>Pane heading three</h2>
+    <section>c</section>
+    <h3>Pane heading four</h3>
+    <section>d</section>
+    <h3>Pane heading five</h3>
+    <section>e</section>
+    <h2>Pane heading six</h2>
+    <section>f</section>
+    <h2 id="last">Pane heading seven</h2>
+    <section>g</section>
+  </main>
+</div>
+
+<!-- The same scrolled-pane shape, but the heading is slotted in from light DOM
+     and the pane lives in a shadow root. The scroll container that moves it is
+     reachable only through assignedSlot, not through its light-DOM parent. -->
+<x-pane><h2 slot="c">Slotted into a shadow scroll pane</h2></x-pane>
+
+<script type="module">
+  customElements.define(
+    'x-pane',
+    class extends HTMLElement {
+      connectedCallback() {
+        if (this.__done) return;
+        this.__done = true;
+        const root = this.attachShadow({ mode: 'open' });
+        root.innerHTML =
+          '<div id="p" style="height:200px;overflow:auto">' +
+          '<slot name="c"></slot><div style="height:2000px"></div></div>';
+        this.__pane = root.getElementById('p');
+      }
+    }
+  );
+  window.scrollShadowPane = (y) => {
+    document.querySelector('x-pane').__pane.scrollTop = y;
+  };
+</script>
+</body>
+</html>

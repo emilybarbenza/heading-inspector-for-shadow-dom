@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fixture: modal dialog scoping</title>
+</head>
+<body>
+<h1>Page title</h1>
+<h2>Page section one</h2>
+<h3>Page subsection</h3>
+<h2>Page section two</h2>
+
+<!-- The dialog lives inside a shadow root, the way a design-system dialog does,
+     so finding it exercises the walker rather than a plain querySelector. -->
+<modal-host></modal-host>
+
+<script type="module">
+  customElements.define(
+    'modal-host',
+    class extends HTMLElement {
+      connectedCallback() {
+        if (this.__done) return;
+        this.__done = true;
+        const root = this.attachShadow({ mode: 'open' });
+        root.innerHTML = `
+          <dialog id="dlg">
+            <h2>Dialog title</h2>
+            <p>body</p>
+            <h4>Dialog detail, skipping level three</h4>
+          </dialog>`;
+        this.__dlg = root.getElementById('dlg');
+      }
+    }
+  );
+
+  // Deliberately not h1-first inside the dialog: a dialog is a section of the
+  // page, so opening at h2 is correct and must not be flagged.
+  window.openDialog = () => document.querySelector('modal-host').__dlg.showModal();
+  window.closeDialog = () => document.querySelector('modal-host').__dlg.close();
+</script>
+</body>
+</html>
