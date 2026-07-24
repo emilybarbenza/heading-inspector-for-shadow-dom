@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo: a shadow-DOM app with heading defects</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0;
+    font: 15px/1.6 system-ui, -apple-system, Segoe UI, sans-serif;
+    color: #14181d; background: #f4f6f8;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { color: #eef2f6; background: #0c1116; }
+  }
+</style>
+</head>
+<body>
+<!--
+  Every heading below the top banner lives inside a CLOSED shadow root, nested
+  several components deep. Page scripts (and most heading extensions) read
+  element.shadowRoot === null here and see nothing. The extension's privileged
+  chrome.dom.openOrClosedShadowRoot reaches all of it.
+
+  Two defects are planted for the audit:
+   - the pricing card jumps h2 -> h4 (skipped-level advisory)
+   - the "settings" panel has an empty <h3> (empty-heading violation)
+-->
+<app-shell></app-shell>
+
+<script type="module">
+  const css = `
+    :host { display: block; }
+    * { box-sizing: border-box; }
+    h1,h2,h3,h4,h5,h6 { margin: 0 0 .3em; }
+    .wrap { display: grid; grid-template-columns: 220px 1fr; gap: 0; min-height: 100vh; }
+    header.top {
+      grid-column: 1 / -1; padding: 18px 24px; color: #fff;
+      background: linear-gradient(90deg,#0b5fbe,#7b1fa2);
+    }
+    nav { padding: 18px; border-right: 1px solid #d7dde3; background: #fff; }
+    @media (prefers-color-scheme: dark){ nav{ background:#121a22; border-color:#2a343d; } }
+    main { padding: 24px; display: grid; gap: 18px; grid-template-columns: 1fr 1fr; }
+    .card {
+      background: #fff; border: 1px solid #d7dde3; border-radius: 10px; padding: 18px;
+    }
+    @media (prefers-color-scheme: dark){ .card{ background:#121a22; border-color:#2a343d; } }
+    .muted { color: #5a6672; }
+    ul { margin: .3em 0 0; padding-left: 1.1em; }
+  `;
+
+  // Helper: define a custom element that mounts a CLOSED shadow root.
+  function closed(tag, render) {
+    customElements.define(tag, class extends HTMLElement {
+      connectedCallback() {
+        if (this.__m) return; this.__m = true;
+        const root = this.attachShadow({ mode: 'closed' });
+        const style = document.createElement('style');
+        style.textContent = css;
+        const holder = document.createElement('div');
+        root.append(style, holder);
+        render(holder, root);
+      }
+    });
+  }
+
+  closed('app-shell', (el) => {
+    el.innerHTML = `
+      <div class="wrap">
+        <header class="top">
+          <h1>Acme Console</h1>
+          <p class="muted" style="color:#e8ecf1">Signed in as Dana · Production</p>
+        </header>
+        <nav><side-nav></side-nav></nav>
+        <main>
+          <billing-card></billing-card>
+          <usage-card></usage-card>
+          <settings-card></settings-card>
+        </main>
+      </div>`;
+  });
+
+  closed('side-nav', (el) => {
+    el.innerHTML = `
+      <h2>Navigation</h2>
+      <nav-section data-title="Workspace"></nav-section>
+      <nav-section data-title="Account"></nav-section>`;
+  });
+
+  // nav-section holds a closed root, and inside it another closed root for the
+  // list — headings four closed roots deep from the document.
+  closed('nav-section', (el, root) => {
+    const title = root.host.getAttribute('data-title') || 'Section';
+    el.innerHTML = `<h3>${title}</h3><nav-links></nav-links>`;
+  });
+  closed('nav-links', (el) => {
+    el.innerHTML = `
+      <h4>Quick links</h4>
+      <ul><li>Overview</li><li>Members</li><li>Audit log</li></ul>`;
+  });
+
+  closed('billing-card', (el) => {
+    // Deliberate defect: h2 then h4, skipping h3.
+    el.innerHTML = `
+      <div class="card">
+        <h2>Billing</h2>
+        <h4>Current plan</h4>
+        <p class="muted">Team · $80 / month</p>
+      </div>`;
+  });
+
+  closed('usage-card', (el) => {
+    el.innerHTML = `
+      <div class="card">
+        <h2>Usage</h2>
+        <h3>This month</h3>
+        <p class="muted">1.2M requests · 340 GB egress</p>
+      </div>`;
+  });
+
+  closed('settings-card', (el) => {
+    // Deliberate defect: an empty heading (no accessible name).
+    el.innerHTML = `
+      <div class="card">
+        <h2>Settings</h2>
+        <h3></h3>
+        <p class="muted">This h3 is empty — a violation the audit flags.</p>
+      </div>`;
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "shadow-heading-outliner",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Chrome extension that outlines, lists, and audits headings, including inside closed shadow roots.",
+  "type": "module",
+  "scripts": {
+    "build:bookmarklet": "node build/build-bookmarklet.mjs",
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "esbuild": "^0.28.1"
+  }
+}

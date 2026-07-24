@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fixture: deep shadow headings</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; margin: 2rem; }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px;
+    clip-path: inset(50%); overflow: hidden; white-space: nowrap;
+  }
+  .offscreen { position: absolute; left: -9999px; }
+</style>
+</head>
+<body>
+<h1>Level 1 in the main document</h1>
+
+<!-- Six closed roots, one per level. element.shadowRoot is null for all of
+     them; only an extension context reaches these. -->
+<closed-1></closed-1>
+
+<!-- Open roots, reachable from the page world, so the bookmarklet finds these. -->
+<open-wrapper>
+  <h4 slot="content">Level 4 slotted from light DOM</h4>
+</open-wrapper>
+
+<!-- Declarative shadow DOM: parsed before any script runs. -->
+<dsd-host>
+  <template shadowrootmode="open">
+    <h2>Level 2 in a declarative open root</h2>
+    <template shadowrootmode="closed"></template>
+  </template>
+</dsd-host>
+
+<!-- aria-level overriding the tag, and role=heading with no tag semantics. -->
+<h2 aria-level="5">Tag h2, aria-level 5</h2>
+<div role="heading" aria-level="3">Role heading, aria-level 3</div>
+<div role="heading">Role heading, no aria-level, computes to 2</div>
+<h3 role="presentation">h3 with role=presentation, not a heading</h3>
+
+<!-- Visibility cases. -->
+<h2 class="sr-only">Visually hidden, still in the accessibility tree</h2>
+<h2 class="offscreen">Parked off-screen at left:-9999px</h2>
+<h2 style="display:none">Not rendered at all</h2>
+<h2 style="visibility:hidden">Visibility hidden</h2>
+
+<div aria-hidden="true"><h2>Inside aria-hidden, counted but not annotated</h2></div>
+<div inert><h2>Inside inert, counted but not annotated</h2></div>
+
+<!-- Hierarchy findings the validator should flag. -->
+<h2>A section heading, level 2</h2>
+<h4>Skips straight to level 4 (skipped-level advisory)</h4>
+<h2 id="empty-heading"></h2>
+<h3 aria-label="Named by aria-label, not empty"></h3>
+
+<!-- Same-origin frame: covered by allFrames injection, not by traversal. -->
+<iframe src="./framed.html" title="Framed content" width="420" height="180"></iframe>
+
+<script type="module">
+  // Chain of six closed roots: closed-1 > closed-2 > ... > closed-6, each
+  // carrying one heading. This is the case the existing extensions fail on.
+  for (let i = 1; i <= 6; i++) {
+    customElements.define(
+      `closed-${i}`,
+      class extends HTMLElement {
+        connectedCallback() {
+          if (this.__done) return;
+          this.__done = true;
+          const root = this.attachShadow({ mode: 'closed' });
+          const h = document.createElement(`h${i}`);
+          h.textContent = `Level ${i} inside closed root depth ${i}`;
+          root.append(h);
+          if (i < 6) root.append(document.createElement(`closed-${i + 1}`));
+        }
+      }
+    );
+  }
+
+  customElements.define(
+    'open-wrapper',
+    class extends HTMLElement {
+      connectedCallback() {
+        if (this.__done) return;
+        this.__done = true;
+        const root = this.attachShadow({ mode: 'open' });
+        root.innerHTML = `
+          <h3>Level 3 inside an open root</h3>
+          <slot name="content"></slot>
+          <inner-open></inner-open>
+        `;
+      }
+    }
+  );
+
+  customElements.define(
+    'inner-open',
+    class extends HTMLElement {
+      connectedCallback() {
+        if (this.__done) return;
+        this.__done = true;
+        const root = this.attachShadow({ mode: 'open' });
+        root.innerHTML = '<h5>Level 5, open root inside an open root</h5>';
+      }
+    }
+  );
+
+  // Heading added late, to exercise the MutationObserver rescan.
+  setTimeout(() => {
+    const h = document.createElement('h6');
+    h.id = 'late';
+    h.textContent = 'Level 6 appended after load';
+    document.body.append(h);
+  }, 400);
+</script>
+</body>
+</html>

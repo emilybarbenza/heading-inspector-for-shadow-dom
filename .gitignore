@@ -1,0 +1,13 @@
+# Dependencies
+node_modules/
+
+# Build artifacts (regenerate with `npm run build:bookmarklet`)
+dist/
+
+# Test output
+test-results/
+playwright-report/
+
+# OS / editor cruft
+.DS_Store
+*.log

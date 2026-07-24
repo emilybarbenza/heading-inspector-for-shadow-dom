@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fixture: framed headings</title>
+<style>body { font: 15px/1.5 system-ui, sans-serif; margin: 1rem; }</style>
+</head>
+<body>
+<h2>Level 2 in a same-origin frame</h2>
+<frame-host></frame-host>
+<script type="module">
+  customElements.define(
+    'frame-host',
+    class extends HTMLElement {
+      connectedCallback() {
+        const root = this.attachShadow({ mode: 'closed' });
+        root.innerHTML = '<h3>Level 3 in a closed root inside a frame</h3>';
+      }
+    }
+  );
+</script>
+</body>
+</html>
