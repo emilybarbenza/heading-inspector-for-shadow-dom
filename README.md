@@ -55,6 +55,7 @@ The chip at bottom-left reports counts, including the cases that can't be drawn 
 | `Alt+Shift+M` | Cycle label detail: level, then owning component, then full chain |
 | `Alt+Shift+C` | Copy the outline as indented text |
 | `Alt+Shift+Q` | Quiet: make the tool `inert`+`aria-hidden` so you can test the page's own tab order and screen-reader output, then restore |
+| `Alt+Shift+P` | Hide or show the outline panel. The boxes stay either way. |
 | `Alt`+click a box | Copy that heading's selector chain and console expression |
 
 ## Outline sidebar
@@ -65,7 +66,7 @@ The **Level + text / + Component / + Selector** control sets how much each row s
 
 The panel is the one part of the tool that is *not* `aria-hidden`, because an auditor who uses a screen reader or the keyboard has to be able to drive it. The cost is that it adds a landmark and focus stops to the page under test. That's exactly what **Quiet** (`Alt+Shift+Q`, or the button in the panel) removes on demand. The panel is top-frame only. Headings inside iframes get boxed in place but aren't listed, since a sidebar inside every iframe would be silly and cross-origin frames can't share the data anyway.
 
-The panel sits over the right edge of the page instead of reflowing it. That's on purpose, since reflowing would change the layout you're auditing. Collapse it, resize it by dragging its inner edge, or Quiet it to see what's underneath.
+The panel sits over the right edge of the page instead of reflowing it. That's on purpose, since reflowing would change the layout you're auditing. Collapse it to a tab, resize it by dragging its inner edge, or Quiet it to see what's underneath. To get it out of the way entirely while keeping the boxes, hide it with `Alt+Shift+P` or the chip's hide panel button, and bring it back the same way.
 
 ![The overlay and outline sidebar on the same app in dark mode](docs/images/overlay-dark.png)
 

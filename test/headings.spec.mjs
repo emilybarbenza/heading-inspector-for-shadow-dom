@@ -49,6 +49,46 @@ test.describe('page world (bookmarklet equivalent)', () => {
     // after the open-root headings the way the old LIFO stack returned them.
     expect(found[0].text).toContain('Level 1 in the main document');
   });
+
+  test('boxes scroll with the page and the panel can be hidden on its own', async ({ page }) => {
+    await page.setViewportSize({ width: 900, height: 380 }); // small, so it scrolls
+    await page.goto(fixture);
+    await page.evaluate(walkerSrc);
+    await page.evaluate(overlaySrc);
+    await page.waitForTimeout(300);
+
+    const read = () =>
+      page.evaluate(() => {
+        const layer = document.getElementById('sho-layer-host').shadowRoot;
+        const box = [...layer.querySelectorAll('.box')].find((b) => b.style.display !== 'none');
+        const hr = box.__shoItem.el.getBoundingClientRect();
+        const br = box.getBoundingClientRect();
+        return { transform: box.style.transform, gapTop: Math.round(br.top - hr.top) };
+      });
+
+    const before = await read();
+    await page.evaluate(() => window.scrollTo(0, 150));
+    await page.waitForTimeout(120);
+    const after = await read();
+
+    // Document-positioned: the box's own transform doesn't change on scroll, and
+    // it stays glued to its heading (the gap is the padding, both before/after).
+    expect(after.transform).toBe(before.transform);
+    expect(after.gapTop).toBe(before.gapTop);
+
+    // Alt+Shift+P hides the panel but leaves the boxes and chip in place.
+    const hidden = await page.evaluate(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', altKey: true, shiftKey: true }));
+      return {
+        panel: document.getElementById('sho-panel-host').style.display,
+        boxes: document.getElementById('sho-layer-host').shadowRoot.querySelectorAll('.box').length,
+        chip: !!document.getElementById('sho-chip-host'),
+      };
+    });
+    expect(hidden.panel).toBe('none');
+    expect(hidden.boxes).toBeGreaterThan(0);
+    expect(hidden.chip).toBe(true);
+  });
 });
 
 /**

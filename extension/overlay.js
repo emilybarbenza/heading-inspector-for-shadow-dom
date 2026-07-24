@@ -86,10 +86,12 @@
   let chipHost = null;
   let chipText = null;
   let chipNote = null;
+  let chipPanelBtn = null;
   let panelHost = null;
   let panelList = null;
   let panelSummary = null;
   let panelCollapsed = false;
+  let panelHidden = false;
   let items = [];
   let pageProblems = [];
   let stats = emptyStats();
@@ -519,14 +521,21 @@
     const shadow = layerHost.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
     style.textContent = `
+      /* Absolute, anchored at the document origin and zero-sized, so the boxes
+         are positioned in document coordinates. That way the browser scrolls
+         them in lockstep with the page instead of us repainting them a frame
+         behind on every scroll. */
       :host {
-        position: fixed !important;
-        inset: 0 !important;
+        position: absolute !important;
+        top: 0 !important;
+        left: 0 !important;
+        width: 0 !important;
+        height: 0 !important;
         pointer-events: none !important;
         z-index: 2147483645 !important;
         forced-color-adjust: none;
       }
-      .layer { position: absolute; inset: 0; }
+      .layer { position: absolute; top: 0; left: 0; }
       .box, .tag {
         position: absolute;
         top: 0;
@@ -653,8 +662,14 @@
 
     const actions = document.createElement('div');
     actions.className = 'actions';
+    actions.append(button('mode', 'alt+shift+m', cycleMode));
+    // The panel only exists in the top frame, so only offer its toggle there.
+    // The chip stays visible when the panel is hidden, so it's the way back.
+    if (isTopFrame()) {
+      chipPanelBtn = button(panelHidden ? 'show panel' : 'hide panel', 'alt+shift+p', togglePanel);
+      actions.append(chipPanelBtn);
+    }
     actions.append(
-      button('mode', 'alt+shift+m', cycleMode),
       button('copy outline', 'alt+shift+c', () => copy(outlineText())),
       button('close', 'esc', off)
     );
@@ -886,6 +901,22 @@
     if (btn) btn.textContent = v ? 'Expand' : 'Collapse';
   }
 
+  function togglePanel() {
+    setPanelHidden(!panelHidden);
+  }
+
+  // Hide the sidebar entirely while leaving the boxes and chip in place. Unlike
+  // Collapse, which leaves a tab, this removes the panel from view completely.
+  // The chip's button and Alt+Shift+P bring it back.
+  function setPanelHidden(v) {
+    panelHidden = v;
+    if (panelHost) panelHost.style.display = v ? 'none' : '';
+    if (chipPanelBtn) {
+      chipPanelBtn.textContent = v ? 'show panel' : 'hide panel';
+      chipPanelBtn.title = `${v ? 'show panel' : 'hide panel'} (alt+shift+p)`;
+    }
+  }
+
   // Resizing the panel by dragging its inner edge. Width lives on the host var.
   let resizeStartX = 0;
   let resizeStartW = 0;
@@ -1075,6 +1106,13 @@
     const placed = [];
     let used = 0;
 
+    // The layer is anchored at the document origin, but a positioned ancestor or
+    // a body margin can offset where it actually landed, so measure it and take
+    // that out. Everything below is in document coordinates.
+    const lr = layerHost.getBoundingClientRect();
+    const originX = lr.left + scrollX;
+    const originY = lr.top + scrollY;
+
     for (const item of items) {
       const el = item.el;
       if (!el.isConnected) continue;
@@ -1091,10 +1129,14 @@
       // frames the heading with a margin instead of hugging the text.
       const w = Math.max(r.width, MIN_BOX) + BOX_PAD * 2;
       const h = Math.max(r.height, MIN_BOX) + BOX_PAD * 2;
-      const bx = Math.round(r.left) - BOX_PAD;
-      const by = Math.round(r.top) - BOX_PAD;
-      if (r.bottom < -h || r.top > innerHeight + h) continue;
-      if (r.right < -w || r.left > innerWidth + w) continue;
+      // Document coordinates, so the box lives in the scrolled page and the
+      // browser moves it with the content instead of us chasing it on scroll.
+      const bx = Math.round(r.left + scrollX - originX) - BOX_PAD;
+      const by = Math.round(r.top + scrollY - originY) - BOX_PAD;
+      // Cull to the viewport plus a one-screen buffer on each side, so boxes are
+      // already placed before they scroll in, without laying out a huge page.
+      if (r.bottom < -innerHeight || r.top > innerHeight * 2) continue;
+      if (r.right < -innerWidth || r.left > innerWidth * 2) continue;
 
       const color = COLORS[item.level] || OUT_OF_RANGE;
       const tier = worstTier(item);
@@ -1175,12 +1217,18 @@
       return;
     }
     // Sit just outside the padded outline so the pulse frames the heading too.
+    // Document coordinates, same as the boxes, so it scrolls with the page.
+    const lr = layerHost.getBoundingClientRect();
+    const originX = lr.left + scrollX;
+    const originY = lr.top + scrollY;
     const pad = BOX_PAD + 2;
     const w = Math.max(r.width, MIN_BOX) + pad * 2;
     const h = Math.max(r.height, MIN_BOX) + pad * 2;
+    const fx = Math.round(r.left + scrollX - originX) - pad;
+    const fy = Math.round(r.top + scrollY - originY) - pad;
     flashBox.style.width = `${w}px`;
     flashBox.style.height = `${h}px`;
-    flashBox.style.transform = `translate(${Math.round(r.left) - pad}px, ${Math.round(r.top) - pad}px)`;
+    flashBox.style.transform = `translate(${fx}px, ${fy}px)`;
     flashBox.style.display = '';
   }
 
@@ -1262,6 +1310,9 @@
       } else if (k === 'q') {
         e.preventDefault();
         setQuiet(!quiet);
+      } else if (k === 'p') {
+        e.preventDefault();
+        togglePanel();
       }
     }
   }
@@ -1289,6 +1340,7 @@
   function start() {
     on = true;
     quiet = false;
+    panelHidden = false;
     if (!layerHost) buildLayer();
     if (!chipHost) buildChip();
     if (!layerHost.isConnected) mount(layerHost);
