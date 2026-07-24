@@ -13,10 +13,11 @@
 <body>
 <!--
   A realistic app built from OPEN shadow roots nested five components deep. No
-  extension is involved: the two <script> tags at the bottom load the same
+  extension is involved. The two <script> tags at the bottom load the same
   walker + overlay the extension ships, running in the page's own world. That
-  reaches every OPEN root at any depth — the depth most heading tools quit at.
-  Closed roots need the extension (see demo/app.html); the chip says so.
+  reaches every OPEN root at any depth, which is the depth most heading tools
+  quit at. Closed roots need the extension (see demo/app.html), and the chip
+  says so.
 
   Planted defects: the pricing card jumps h2 -> h4; the settings card has an
   empty <h3>.
@@ -58,7 +59,7 @@
   open('nav-links', el => { el.innerHTML = `<h4>Quick links</h4><ul><li>Overview</li><li>Members</li><li>Audit log</li></ul>`; });
   open('billing-card', el => { el.innerHTML = `<div class="card"><h2>Billing</h2><h4>Current plan</h4><p class="muted">Team · $80 / month</p></div>`; });
   open('usage-card', el => { el.innerHTML = `<div class="card"><h2>Usage</h2><h3>This month</h3><p class="muted">1.2M requests · 340 GB egress</p></div>`; });
-  open('settings-card', el => { el.innerHTML = `<div class="card"><h2>Settings</h2><h3></h3><p class="muted">This h3 is empty — a violation the audit flags.</p></div>`; });
+  open('settings-card', el => { el.innerHTML = `<div class="card"><h2>Settings</h2><h3></h3><p class="muted">This h3 is empty, which the audit flags as a violation.</p></div>`; });
 </script>
 
 <!-- The tool itself, as plain page scripts. `defer` makes them run after the

@@ -1,7 +1,7 @@
 /**
- * Heading annotator. Depends on walker.js having run first.
+ * Heading annotator. Needs walker.js to have run first.
  *
- * Re-running this file toggles the overlay off and on, which is how both the
+ * Re-running this file toggles the overlay off and on. That's how both the
  * toolbar action and the bookmarklet work.
  */
 (() => {
@@ -21,13 +21,16 @@
   const CHIP_ID = 'sho-chip-host';
   const PANEL_ID = 'sho-panel-host';
   const MIN_BOX = 16;
+  // Breathing room between a heading's tight bounding box and the drawn outline,
+  // so the box frames the heading instead of hugging the text.
+  const BOX_PAD = 5;
   const MAX_HEADINGS = 3000;
   const LABEL_MODES = ['level', 'component', 'chain'];
 
   // Two tiers, keyed to WCAG. A violation is something an automated checker
-  // (axe et al.) reports as a failure; an advisory is a best-practice finding
-  // that is not, strictly, a Success Criterion failure. Keeping them apart
-  // matters: an auditor files the first as a defect and the second as a note.
+  // (like axe) reports as a failure. An advisory is a best-practice finding
+  // that isn't strictly a Success Criterion failure. They're kept apart since
+  // an auditor files the first as a defect and the second as a note.
   const VIOLATION = 'violation';
   const ADVISORY = 'advisory';
   const PROBLEMS = {
@@ -63,8 +66,8 @@
     },
   };
 
-  // White text on each of these clears 5.9:1; most clear 6.5:1. Level is also
-  // carried by the label text, so the palette is redundant, not load-bearing.
+  // White text on each of these clears 5.9:1, and most clear 6.5:1. The label
+  // text also carries the level, so the palette is redundant, not load-bearing.
   const COLORS = {
     1: '#b00050',
     2: '#7b1fa2',
@@ -126,7 +129,7 @@
         });
       }
     } catch (_) {
-      /* bookmarklet: stays in memory */
+      /* bookmarklet: just keep it in memory */
     }
   }
 
@@ -148,7 +151,7 @@
     const roles = roleAttr ? roleAttr.split(/\s+/) : [];
     const isRoleHeading = roles.includes('heading');
 
-    // An explicit non-heading role wins over the native tag semantics.
+    // An explicit non-heading role beats the native tag.
     if (native && roles.length && !isRoleHeading) return null;
     if (!native && !isRoleHeading) return null;
 
@@ -192,7 +195,7 @@
     if (style.visibility === 'hidden' || style.visibility === 'collapse') return 'hidden';
     if (r.width <= 4 || r.height <= 4) return 'hidden';
 
-    // Absolute document coordinates: distinguishes an sr-only heading parked at
+    // Absolute document coordinates, so we can tell an sr-only heading parked at
     // left:-9999px from an ordinary heading below the fold.
     const docLeft = r.left + scrollX;
     const docTop = r.top + scrollY;
@@ -203,10 +206,10 @@
   }
 
   /**
-   * The accessible name, approximated well enough to tell a genuinely empty
-   * heading from one named by aria-label/labelledby/title or a captioned image.
-   * Without this, icon-only and aria-labelled headings would false-positive as
-   * empty-heading violations.
+   * The accessible name, close enough to tell a genuinely empty heading from one
+   * named by aria-label/labelledby/title or a captioned image. Without this,
+   * icon-only and aria-labelled headings would falsely flag as empty-heading
+   * violations.
    */
   function accName(el) {
     const label = (el.getAttribute('aria-label') || '').trim();
@@ -252,10 +255,10 @@
     stats.truncated = truncated;
 
     // Two sequences in reading order. `seq` is every heading in the
-    // accessibility tree (used for the hierarchy checks); `out` is the subset
+    // accessibility tree, used for the hierarchy checks. `out` is the subset
     // that has drawable on-page geometry. display:none and aria-hidden/inert
-    // headings are in neither, but are counted for the chip so a screenshot
-    // gap is never read as a tool bug.
+    // headings are in neither, but they're counted for the chip so a gap in a
+    // screenshot doesn't get read as a tool bug.
     const seq = [];
     const out = [];
 
@@ -377,8 +380,9 @@
     }
     if (item.fromAria) text += ' \u00b7aria';
     if (item.hidden) text += ' \u00b7hidden';
-    // A \u2715 for a violation, a \u26a0 for an advisory, then the shortest name of each
-    // finding, so the box screenshot carries the defect without the sidebar.
+    // A \u2715 for a violation, a \u26a0 for an advisory, then the short name of each
+    // finding, so the box screenshot carries the defect on its own without the
+    // sidebar.
     for (const code of item.problems) {
       const p = PROBLEMS[code];
       text += `  ${p.tier === VIOLATION ? '\u2715' : '\u26a0'} ${p.short}`;
@@ -422,7 +426,7 @@
 
   function outlineText() {
     const lines = [];
-    lines.push(`Heading outline \u2014 ${location.href}`);
+    lines.push(`Heading outline: ${location.href}`);
     lines.push(new Date().toISOString());
     lines.push(countsLine());
     if (!walker.canPierceClosed) {
@@ -480,7 +484,7 @@
       ta.remove();
       flash('Copied');
     } catch (_) {
-      flash('Copy failed \u2014 see console');
+      flash('Copy failed, see console');
       console.log(text);
     }
   }
@@ -508,8 +512,8 @@
     layerHost = document.createElement('div');
     layerHost.id = LAYER_ID;
     // Kept out of the page's accessibility tree so an axe run or screen reader
-    // pass with outlines on is uncontaminated. Not inert, because inert would
-    // also block the alt+click copy; there is nothing focusable in here anyway.
+    // pass with outlines on stays clean. Not inert, since inert would also block
+    // the alt+click copy, and there's nothing focusable in here anyway.
     layerHost.setAttribute('aria-hidden', 'true');
 
     const shadow = layerHost.attachShadow({ mode: 'open' });
@@ -531,9 +535,8 @@
         forced-color-adjust: none;
         will-change: transform;
       }
-      /* The 1px white ring is what keeps the outline legible on dark pages,
-         which is the difference between a usable defect screenshot and a
-         useless one. */
+      /* The 1px white ring keeps the outline legible on dark pages, which is
+         what makes a defect screenshot usable. */
       .box {
         border: 2px solid var(--c);
         border-radius: 2px;
@@ -543,9 +546,9 @@
       .box[data-style="aria"]   { border-style: dashed; }
       .box[data-style="hidden"] { border-style: dotted; }
       /* A flagged heading keeps its level color (still the load-bearing
-         encoding) and gains a second ring: solid amber for an advisory, a
-         heavier double red for a violation. Redundant with the label's ⚠/✕ so
-         a grayscale or CVD screenshot still reads. */
+         encoding) and gets a second ring: solid amber for an advisory, a
+         heavier double red for a violation. It's redundant with the label's
+         ⚠/✕, so a grayscale or CVD screenshot still reads. */
       .box[data-flag="advisory"] {
         box-shadow: 0 0 0 1px rgba(255,255,255,0.95),
                     0 0 0 4px #b8860b,
@@ -594,8 +597,9 @@
   function buildChip() {
     chipHost = document.createElement('div');
     chipHost.id = CHIP_ID;
-    // aria-hidden but not inert: mouse-operable, invisible to assistive tech,
-    // and its buttons carry tabindex="-1" so the page's tab order is untouched.
+    // aria-hidden but not inert, so it's mouse-operable and invisible to
+    // assistive tech. Its buttons carry tabindex="-1" so the page's tab order
+    // stays untouched.
     chipHost.setAttribute('aria-hidden', 'true');
 
     const shadow = chipHost.attachShadow({ mode: 'open' });
@@ -682,8 +686,8 @@
     try {
       return window.top === window.self;
     } catch (_) {
-      // Cross-origin ancestor throws on window.top access, which itself proves
-      // this is a sub-frame.
+      // A cross-origin ancestor throws on window.top access, which by itself
+      // means this is a sub-frame.
       return false;
     }
   }
@@ -696,11 +700,11 @@
     { mode: 'chain', label: '+ Selector' },
   ];
 
-  // Unlike the overlay and chip, the panel is the tool's own operable UI, so it
-  // is NOT aria-hidden: an auditor who themselves uses a screen reader or the
-  // keyboard has to be able to drive it. The cost is that it adds focus stops
-  // and a landmark to the page under test; the Quiet toggle (Alt+Shift+Q) makes
-  // the whole tool inert + aria-hidden on demand so the page's own tab order and
+  // Unlike the overlay and chip, the panel is the tool's own operable UI, so
+  // it's NOT aria-hidden. An auditor who uses a screen reader or the keyboard
+  // has to be able to drive it. The cost is that it adds focus stops and a
+  // landmark to the page under test. The Quiet toggle (Alt+Shift+Q) makes the
+  // whole tool inert + aria-hidden on demand, so the page's own tab order and
   // accessibility tree can be tested clean.
   function buildPanel() {
     panelHost = document.createElement('div');
@@ -986,8 +990,8 @@
         row.append(f);
       }
 
-      // Accessible name for the row button: level, text, and any findings,
-      // spoken as one string so a screen-reader auditor hears the defect.
+      // Accessible name for the row button: level, text, and any findings, as
+      // one string so a screen-reader auditor hears the defect.
       const aria = [`Heading level ${item.level}`, name || 'no text'];
       for (const c of item.problems) {
         aria.push(`${PROBLEMS[c].tier === VIOLATION ? 'violation' : 'advisory'}: ${PROBLEMS[c].short}`);
@@ -1003,7 +1007,7 @@
   }
 
   // Scroll a heading into view, crossing shadow boundaries (scrollIntoView on
-  // the element itself works even when it lives in a closed root), then pulse a
+  // the element itself works even when it's in a closed root), then pulse a
   // highlight over it.
   function goTo(item) {
     if (quiet) setQuiet(false);
@@ -1039,8 +1043,8 @@
       } else {
         host.removeAttribute('inert');
         host.style.removeProperty('opacity');
-        // The layer and chip are always aria-hidden by design; only the panel
-        // returns to being exposed.
+        // The layer and chip are always aria-hidden by design, so only the
+        // panel goes back to being exposed.
         if (host === panelHost) host.removeAttribute('aria-hidden');
       }
     }
@@ -1083,8 +1087,12 @@
         continue;
       }
 
-      const w = Math.max(r.width, MIN_BOX);
-      const h = Math.max(r.height, MIN_BOX);
+      // Inflate the tight bounding box by BOX_PAD on every side, so the outline
+      // frames the heading with a margin instead of hugging the text.
+      const w = Math.max(r.width, MIN_BOX) + BOX_PAD * 2;
+      const h = Math.max(r.height, MIN_BOX) + BOX_PAD * 2;
+      const bx = Math.round(r.left) - BOX_PAD;
+      const by = Math.round(r.top) - BOX_PAD;
       if (r.bottom < -h || r.top > innerHeight + h) continue;
       if (r.right < -w || r.left > innerWidth + w) continue;
 
@@ -1094,7 +1102,7 @@
       box.style.setProperty('--c', color);
       box.style.width = `${w}px`;
       box.style.height = `${h}px`;
-      box.style.transform = `translate(${Math.round(r.left)}px, ${Math.round(r.top)}px)`;
+      box.style.transform = `translate(${bx}px, ${by}px)`;
       box.dataset.style = item.hidden ? 'hidden' : item.fromAria ? 'aria' : 'native';
       if (tier) box.dataset.flag = tier;
       else box.removeAttribute('data-flag');
@@ -1109,13 +1117,15 @@
       tag.textContent = labelFor(item);
       tag.style.display = '';
 
-      // Collision avoidance: stacked headings otherwise produce overlapping
+      // Collision avoidance. Without it, stacked headings produce overlapping
       // labels, which ruins the screenshot the tool exists to produce.
       const tw = tag.textContent.length * 7.3 + 12;
       const th = 18;
-      const homeX = Math.max(2, Math.round(r.left) - 1);
+      // Anchor the label to the padded box, not the raw rect, so it rides just
+      // above the outline.
+      const homeX = Math.max(2, bx);
       let lx = homeX;
-      let ly = r.top < 22 ? Math.round(r.top) + 1 : Math.round(r.top) - th;
+      let ly = by < 22 ? by + 1 : by - th;
       for (let attempt = 0; attempt < 24; attempt++) {
         const hit = placed.find((p) => overlaps({ l: lx, t: ly, r: lx + tw, b: ly + th }, p));
         if (!hit) break;
@@ -1164,11 +1174,13 @@
       flashBox.style.display = 'none';
       return;
     }
-    const w = Math.max(r.width, MIN_BOX);
-    const h = Math.max(r.height, MIN_BOX);
+    // Sit just outside the padded outline so the pulse frames the heading too.
+    const pad = BOX_PAD + 2;
+    const w = Math.max(r.width, MIN_BOX) + pad * 2;
+    const h = Math.max(r.height, MIN_BOX) + pad * 2;
     flashBox.style.width = `${w}px`;
     flashBox.style.height = `${h}px`;
-    flashBox.style.transform = `translate(${Math.round(r.left)}px, ${Math.round(r.top)}px)`;
+    flashBox.style.transform = `translate(${Math.round(r.left) - pad}px, ${Math.round(r.top) - pad}px)`;
     flashBox.style.display = '';
   }
 
@@ -1180,7 +1192,7 @@
 
   // ---------------------------------------------------------------- observing
 
-  // MutationObserver does not cross shadow boundaries, so every root needs one.
+  // MutationObserver doesn't cross shadow boundaries, so every root needs one.
   function observeAll() {
     disconnectAll();
     const { roots } = walker.walk({ skip: (el) => isOurs(el) });
@@ -1282,11 +1294,12 @@
     if (!layerHost.isConnected) mount(layerHost);
     if (!chipHost.isConnected) mount(chipHost);
 
-    // The overlay boxes are drawn in every frame — each iframe outlines its own
-    // headings in its own coordinate space. The outline PANEL is top-frame only:
-    // a full-height sidebar inside every iframe would be absurd, and cross-origin
-    // frames can't share JS to aggregate anyway. Sub-frame headings are boxed in
-    // place but not listed in the top panel. (renderPanel is a no-op without it.)
+    // The overlay boxes are drawn in every frame, so each iframe outlines its
+    // own headings in its own coordinate space. The outline PANEL is top-frame
+    // only, since a full-height sidebar inside every iframe would be silly and
+    // cross-origin frames can't share JS to aggregate anyway. Sub-frame headings
+    // get boxed in place but aren't listed in the top panel. (renderPanel is a
+    // no-op without the panel.)
     if (isTopFrame()) {
       if (!panelHost) buildPanel();
       if (!panelHost.isConnected) mount(panelHost);

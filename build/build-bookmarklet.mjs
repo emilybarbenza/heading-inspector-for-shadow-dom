@@ -2,12 +2,11 @@
 /**
  * Builds a bookmarklet from the same walker + annotator source.
  *
- * Why this target exists: extension installs are blocked by policy in many
- * government and finance environments, which is exactly where you most need to
- * hand a heading tool to somebody else's dev team. The bookmarklet runs in the
- * page's own world, so chrome.dom is unavailable and closed shadow roots are
- * NOT traversed. The overlay labels that degradation in the chip rather than
- * silently under-reporting.
+ * Why this exists: extension installs are blocked by policy in a lot of
+ * government and finance environments, which is often where you need to hand a
+ * heading tool to someone else's dev team. The bookmarklet runs in the page's
+ * own world, so chrome.dom isn't available and closed shadow roots are NOT
+ * traversed. The overlay says so in the chip instead of quietly under-reporting.
  *
  * Usage: node build/build-bookmarklet.mjs
  */
@@ -25,10 +24,10 @@ for (const rel of sources) {
   parts.push(await readFile(join(root, rel), 'utf8'));
 }
 
-// The two files are self-contained IIFEs that publish onto window; wrapping and
-// minifying preserves those side effects while stripping the ~40% of the source
-// that is comments and whitespace. Without this the bookmarklet is well past the
-// ~64KB some browsers truncate.
+// The two files are self-contained IIFEs that publish onto window. Wrapping and
+// minifying keeps those side effects and strips the ~40% of the source that's
+// comments and whitespace. Without it the bookmarklet is well past the ~64KB
+// some browsers truncate.
 const wrapped = `(function(){${parts.join('\n;\n')}})();`;
 const { code } = await transform(wrapped, {
   minify: true,

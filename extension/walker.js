@@ -4,8 +4,8 @@
  * Composed-tree traversal that descends into shadow roots of any depth,
  * including closed roots where the host environment allows it.
  *
- * This file is deliberately free of any heading logic so it can be lifted out
- * as a standalone package. It defines one global and nothing else.
+ * This file has no heading logic in it, so it can be lifted out as a standalone
+ * package. It defines one global and nothing else.
  *
  * Capability by environment:
  *   Chrome/Edge extension  chrome.dom.openOrClosedShadowRoot   open + closed
@@ -37,7 +37,7 @@
    */
   function shadowRootOf(el) {
     if (hasChromeDom) {
-      // Throws rather than returning null for non-hosts in some versions.
+      // Some versions throw instead of returning null for non-hosts.
       try {
         const r = chrome.dom.openOrClosedShadowRoot(el);
         if (r) return r;
@@ -62,7 +62,7 @@
 
   /**
    * Walks up the composed tree, crossing shadow boundaries via ShadowRoot.host.
-   * Element.closest() cannot do this.
+   * Element.closest() can't do this.
    *
    * @param {Node} node
    * @param {(el: Element) => boolean} predicate
@@ -78,8 +78,8 @@
   }
 
   /**
-   * Resolves the text a user would perceive, expanding <slot> elements to their
-   * assigned nodes. Plain textContent returns '' for slotted component content.
+   * Resolves the text a user would actually see, expanding <slot> elements to
+   * their assigned nodes. Plain textContent returns '' for slotted content.
    *
    * @param {Node} node
    * @param {number} depth
@@ -104,14 +104,14 @@
 
   /**
    * Depth-first over the composed tree. Matches come back in composed
-   * pre-order: a host is visited, then its shadow content, then its light
-   * children. Document order is what the hierarchy checks (skipped levels,
-   * first heading) and the outline both depend on, so this is ordered rather
-   * than the cheaper LIFO stack.
+   * pre-order: visit a host, then its shadow content, then its light children.
+   * The hierarchy checks (skipped levels, first heading) and the outline both
+   * depend on document order, so this is ordered instead of using the cheaper
+   * LIFO stack.
    *
-   * Slotted light children appear at their light-DOM position, not their
-   * flattened slot position. That is the known-limitation seam; full
-   * flattened-tree ordering would need slot assignment resolution per root.
+   * Slotted light children show up at their light-DOM position, not their
+   * flattened slot position. That's a known limitation. Full flattened-tree
+   * ordering would need slot assignment resolved per root.
    *
    * @param {object} [options]
    * @param {Document|ShadowRoot} [options.root]      where to start

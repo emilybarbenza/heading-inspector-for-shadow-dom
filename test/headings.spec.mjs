@@ -11,8 +11,8 @@ const walkerSrc = await readFile(join(root, 'extension/walker.js'), 'utf8');
 const overlaySrc = await readFile(join(root, 'extension/overlay.js'), 'utf8');
 
 /**
- * Page-world run. No chrome.dom here, so this asserts the documented
- * degradation: open roots are found, closed roots are not.
+ * Page-world run. No chrome.dom here, so this checks the documented behavior:
+ * open roots are found, closed roots aren't.
  */
 test.describe('page world (bookmarklet equivalent)', () => {
   test('reaches open roots at depth, reports closed roots as unreachable', async ({ page }) => {
@@ -58,19 +58,19 @@ test.describe('extension context', () => {
   test('reaches headings six closed roots deep', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'sho-'));
 
-    // The shipped manifest deliberately has no host_permissions — access is
-    // granted per-click by activeTab. A headless test can't perform that click
-    // gesture, so it drives the identical walker/overlay/background code from a
-    // temp copy whose manifest adds host access. What ships stays clean.
+    // The shipped manifest has no host_permissions on purpose. Access is granted
+    // per click by activeTab. A headless test can't do that click, so it runs the
+    // same walker/overlay/background code from a temp copy whose manifest adds
+    // host access. What ships stays clean.
     const extPath = await mkdtemp(join(tmpdir(), 'sho-ext-'));
     for (const f of ['walker.js', 'overlay.js', 'background.js']) {
       await copyFile(join(root, 'extension', f), join(extPath, f));
     }
     const manifest = JSON.parse(await readFile(join(root, 'extension', 'manifest.json'), 'utf8'));
     manifest.host_permissions = ['<all_urls>'];
-    // Icons are referenced by the real manifest but not copied into this temp
-    // dir; drop the references so the missing files don't fail extension load.
-    // (The point of this test is closed-root traversal, not iconography.)
+    // The real manifest references icons, but they aren't copied into this temp
+    // dir, so drop the references or the missing files fail extension load. This
+    // test is about closed-root traversal, not icons.
     delete manifest.icons;
     delete manifest.action.default_icon;
     await writeFile(join(extPath, 'manifest.json'), JSON.stringify(manifest), 'utf8');
@@ -88,7 +88,7 @@ test.describe('extension context', () => {
     const page = await context.newPage();
     await page.goto(fixture);
 
-    // Trigger the action the same way a click would. Playwright cannot click a
+    // Trigger the action the same way a click would. Playwright can't click a
     // toolbar icon, so drive the service worker directly.
     const [worker] = context.serviceWorkers();
     const sw = worker ?? (await context.waitForEvent('serviceworker'));
@@ -100,13 +100,13 @@ test.describe('extension context', () => {
       });
     });
 
-    // The walker runs in the extension's ISOLATED world — that is the only
-    // world with chrome.dom, hence the only one that reaches closed roots.
-    // page.evaluate runs in the MAIN world and cannot see window.__shadow*, so
-    // the tool's own state is read back through executeScript, which targets the
-    // isolated world. (The overlay DOM it builds is shared across worlds, so
-    // those checks stay in page.evaluate.) A named prop selects what to return,
-    // avoiding new Function — the MV3 service worker CSP forbids eval.
+    // The walker runs in the extension's ISOLATED world, the only world with
+    // chrome.dom, so it's the only one that reaches closed roots. page.evaluate
+    // runs in the MAIN world and can't see window.__shadow*, so the tool's own
+    // state is read back through executeScript, which targets the isolated world.
+    // (The overlay DOM it builds is shared across worlds, so those checks stay in
+    // page.evaluate.) A named prop picks what to return, so we avoid new Function,
+    // since the MV3 service worker CSP forbids eval.
     const inTool = (prop) =>
       sw.evaluate(async (p) => {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -140,9 +140,9 @@ test.describe('extension context', () => {
     // role=presentation on an h3 must not count as a heading.
     expect(outline).not.toContain('role=presentation');
 
-    // Hierarchy validation. The empty h2 is a violation; the h2->h4 jump is an
-    // advisory; both must show, and the aria-labelled empty h3 must NOT be
-    // flagged empty (accName sees the label).
+    // Hierarchy validation. The empty h2 is a violation and the h2->h4 jump is an
+    // advisory, so both must show. The aria-labelled empty h3 must NOT be flagged
+    // empty, since accName sees the label.
     expect(stats.violations).toBe(1);
     expect(stats.advisories).toBeGreaterThanOrEqual(1);
     expect(outline).toContain('skipped level');

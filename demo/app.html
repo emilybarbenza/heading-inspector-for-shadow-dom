@@ -89,7 +89,7 @@
   });
 
   // nav-section holds a closed root, and inside it another closed root for the
-  // list — headings four closed roots deep from the document.
+  // list, so headings end up four closed roots deep from the document.
   closed('nav-section', (el, root) => {
     const title = root.host.getAttribute('data-title') || 'Section';
     el.innerHTML = `<h3>${title}</h3><nav-links></nav-links>`;
@@ -125,7 +125,7 @@
       <div class="card">
         <h2>Settings</h2>
         <h3></h3>
-        <p class="muted">This h3 is empty — a violation the audit flags.</p>
+        <p class="muted">This h3 is empty, which the audit flags as a violation.</p>
       </div>`;
   });
 </script>
