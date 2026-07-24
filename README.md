@@ -16,14 +16,20 @@ No network requests. No `host_permissions`, no content scripts registered agains
 
 ## Install
 
-Load it unpacked until it's on the Web Store:
+1. `chrome://extensions` → enable the Developer mode switch
+<img width="2218" height="1038" alt="Chrome Extensions page shows "Developer mode" switch and "Load unpacked" button highlighted" src="https://github.com/user-attachments/assets/311a50d2-e458-43a7-a093-d37b0e80969f" />
 
-1. Go to `chrome://extensions` and turn on Developer mode
-2. Click Load unpacked and select the `extension/` directory
-3. Open the puzzle-piece menu and pin **Headings Bookmarklet for Shadow DOM** so its icon is on the toolbar
-4. Click the icon, or press `Alt+Shift+H`, to toggle it on a tab
+2. Select the Load unpacked button
+3. Select the `extension/` directory
+4. Open the puzzle-piece menu and pin **Headings Bookmarklet for Shadow DOM** so its icon
+   is on the toolbar
+5. Select the icon, or press `Alt+Shift+H`, to toggle it on a tab
 
-Load it through `chrome://extensions`, not the `--load-extension` command-line switch. Chrome 137+ ignores unpacked extensions passed on the command line. If you just want a quick look on a page built from *open* shadow roots, open `demo/standalone.html`. It loads the same walker and overlay as ordinary page scripts, so no extension is needed (closed roots still need the extension).
+Load the extension through `chrome://extensions`, not the `--load-extension` command-line
+switch: Chrome 137+ ignores unpacked extensions passed on the command line. For
+an install-free look on a page built from *open* shadow roots, open
+`demo/standalone.html`. Tt loads the same walker and overlay as ordinary page
+scripts, no extension required (closed roots need the extension).
 
 ## Use
 
