@@ -89,6 +89,99 @@ test.describe('page world (bookmarklet equivalent)', () => {
     expect(hidden.boxes).toBeGreaterThan(0);
     expect(hidden.chip).toBe(true);
   });
+
+  test('detail control is a radio group and Esc dismisses progressively', async ({ page }) => {
+    await page.goto(fixture);
+    await page.evaluate(walkerSrc);
+    await page.evaluate(overlaySrc);
+    await page.waitForTimeout(300);
+
+    // The detail picker is a radio group with exactly one checked radio, not a
+    // set of independent toggle buttons.
+    const radio = await page.evaluate(() => {
+      const seg = document.getElementById('sho-panel-host').shadowRoot.querySelector('.seg');
+      const btns = [...seg.querySelectorAll('button')];
+      return {
+        group: seg.getAttribute('role'),
+        roles: btns.map((b) => b.getAttribute('role')),
+        checked: btns.map((b) => b.getAttribute('aria-checked')),
+      };
+    });
+    expect(radio.group).toBe('radiogroup');
+    expect(radio.roles).toEqual(['radio', 'radio', 'radio']);
+    expect(radio.checked.filter((c) => c === 'true')).toHaveLength(1);
+
+    // Progressive Esc: first hides the panel (boxes stay), second closes the tool.
+    const esc1 = await page.evaluate(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      return {
+        panel: document.getElementById('sho-panel-host').style.display,
+        boxes: document.getElementById('sho-layer-host').shadowRoot.querySelectorAll('.box').length,
+      };
+    });
+    expect(esc1.panel).toBe('none');
+    expect(esc1.boxes).toBeGreaterThan(0);
+
+    const esc2 = await page.evaluate(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      return { layerGone: !document.getElementById('sho-layer-host') };
+    });
+    expect(esc2.layerGone).toBe(true);
+  });
+
+  test('arrow-key navigation and focus-triggered tooltips', async ({ page }) => {
+    await page.goto(fixture);
+    await page.evaluate(walkerSrc);
+    await page.evaluate(overlaySrc);
+    await page.waitForTimeout(300);
+    const sr = 'document.getElementById("sho-panel-host").shadowRoot';
+
+    // Radio group: roving tabindex (only the checked one is tabbable), and an
+    // arrow key moves the selection.
+    const rovingBefore = await page.evaluate(
+      (sr) => [...eval(sr).querySelectorAll('.seg button')].map((b) => b.tabIndex),
+      sr
+    );
+    expect(rovingBefore).toEqual([0, -1, -1]);
+    await page.evaluate((sr) => eval(sr).querySelector('.seg button[aria-checked="true"]').focus(), sr);
+    await page.keyboard.press('ArrowRight');
+    const radioAfter = await page.evaluate((sr) => {
+      const btns = [...eval(sr).querySelectorAll('.seg button')];
+      return {
+        checkedIdx: btns.findIndex((b) => b.getAttribute('aria-checked') === 'true'),
+        focusedIdx: btns.indexOf(eval(sr).activeElement),
+      };
+    }, sr);
+    expect(radioAfter).toEqual({ checkedIdx: 1, focusedIdx: 1 });
+
+    // Outline is a tree; rows are treeitems with aria-level; ArrowDown moves focus.
+    const tree = await page.evaluate((sr) => {
+      const rows = [...eval(sr).querySelectorAll('.row')];
+      return { ul: eval(sr).querySelector('ul').getAttribute('role'), role: rows[0].getAttribute('role'), level: rows[0].getAttribute('aria-level') };
+    }, sr);
+    expect(tree.ul).toBe('tree');
+    expect(tree.role).toBe('treeitem');
+    expect(tree.level).toBe('1');
+    await page.evaluate((sr) => eval(sr).querySelector('.row').focus(), sr);
+    await page.keyboard.press('ArrowDown');
+    const rowFocus = await page.evaluate(
+      (sr) => [...eval(sr).querySelectorAll('.row')].indexOf(eval(sr).activeElement),
+      sr
+    );
+    expect(rowFocus).toBe(1);
+
+    // Tooltip appears on keyboard focus (native title never does) and wires
+    // aria-describedby.
+    const tip = await page.evaluate((sr) => {
+      const hide = eval(sr).querySelector('header .iconbtn');
+      hide.focus();
+      const t = eval(sr).getElementById('sho-tip');
+      return { hidden: t.hidden, hasText: t.textContent.length > 0, describedby: hide.getAttribute('aria-describedby') };
+    }, sr);
+    expect(tip.hidden).toBe(false);
+    expect(tip.hasText).toBe(true);
+    expect(tip.describedby).toBe('sho-tip');
+  });
 });
 
 /**
@@ -202,18 +295,6 @@ test.describe('extension context', () => {
     expect(panel.ariaHidden).toBeNull();
     expect(panel.landmark).toBe(true);
     expect(panel.rows).toBeGreaterThan(0);
-
-    // Quiet mode makes the tool inert + aria-hidden for a clean page audit.
-    const quieted = await page.evaluate(() => {
-      const host = document.getElementById('sho-panel-host');
-      host.shadowRoot.querySelector('[data-role="quiet"]').click();
-      return {
-        inert: host.hasAttribute('inert'),
-        ariaHidden: host.getAttribute('aria-hidden'),
-      };
-    });
-    expect(quieted.inert).toBe(true);
-    expect(quieted.ariaHidden).toBe('true');
 
     await context.close();
   });

@@ -79,7 +79,6 @@
   const OUT_OF_RANGE = '#37474f';
 
   let on = false;
-  let quiet = false;
   let labelMode = 'level';
   let layerHost = null;
   let layer = null;
@@ -90,7 +89,8 @@
   let panelHost = null;
   let panelList = null;
   let panelSummary = null;
-  let panelCollapsed = false;
+  let panelStatus = null;
+  let tipEl = null;
   let panelHidden = false;
   let items = [];
   let pageProblems = [];
@@ -493,6 +493,9 @@
 
   let flashTimer = 0;
   function flash(msg) {
+    // Announce to screen readers too: the chip note is aria-hidden, so a
+    // visually-hidden live region in the panel carries the confirmation.
+    if (panelStatus) panelStatus.textContent = msg;
     if (!chipNote) return;
     chipNote.textContent = msg;
     clearTimeout(flashTimer);
@@ -503,9 +506,10 @@
   }
 
   function defaultNote() {
-    const mode = labelMode === 'level' ? 'level' : labelMode === 'component' ? 'component' : 'chain';
-    const degraded = walker.canPierceClosed ? '' : ' \u00b7 open roots only';
-    return `${mode}${degraded} \u00b7 alt+click a box to copy \u00b7 esc to close`;
+    // Kept short so it never truncates next to the buttons. The shortcut hints
+    // moved to the button tooltips; the one status worth showing here is when
+    // the environment can only reach open roots.
+    return walker.canPierceClosed ? '' : 'open roots only';
   }
 
   // ---------------------------------------------------------------- rendering
@@ -542,7 +546,6 @@
         left: 0;
         box-sizing: border-box;
         forced-color-adjust: none;
-        will-change: transform;
       }
       /* The 1px white ring keeps the outline legible on dark pages, which is
          what makes a defect screenshot usable. */
@@ -560,7 +563,7 @@
          ⚠/✕, so a grayscale or CVD screenshot still reads. */
       .box[data-flag="advisory"] {
         box-shadow: 0 0 0 1px rgba(255,255,255,0.95),
-                    0 0 0 4px #b8860b,
+                    0 0 0 4px #946200,
                     inset 0 0 0 1px rgba(255,255,255,0.95);
       }
       .box[data-flag="violation"] {
@@ -569,7 +572,7 @@
                     0 0 0 6px rgba(255,255,255,0.95),
                     inset 0 0 0 1px rgba(255,255,255,0.95);
       }
-      .tag[data-flag="advisory"]  { box-shadow: 0 0 0 1px rgba(255,255,255,0.95), 0 0 0 3px #b8860b; }
+      .tag[data-flag="advisory"]  { box-shadow: 0 0 0 1px rgba(255,255,255,0.95), 0 0 0 3px #946200; }
       .tag[data-flag="violation"] { box-shadow: 0 0 0 1px rgba(255,255,255,0.95), 0 0 0 3px #c1121f; }
       .tag {
         font: 700 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -585,9 +588,12 @@
       .clickable { pointer-events: auto; cursor: copy; }
       .flash {
         position: absolute; top: 0; left: 0; box-sizing: border-box;
-        border: 3px solid #0b5fbe; border-radius: 3px;
-        background: rgba(11,95,190,0.18);
-        box-shadow: 0 0 0 2px rgba(255,255,255,0.95), 0 0 14px 3px rgba(11,95,190,0.7);
+        /* Neutral high-contrast pulse (dark ring plus a white halo) so it stands
+           apart from every level color and the red/amber flags, and reads on a
+           light or dark page. The motion gets the attention, not a hue. */
+        border: 3px solid rgba(17,17,17,0.92); border-radius: 3px;
+        background: rgba(255,255,255,0.12);
+        box-shadow: 0 0 0 3px rgba(255,255,255,0.95), 0 0 16px 4px rgba(0,0,0,0.45);
         animation: shoPulse 1.4s ease-out 1;
         forced-color-adjust: none;
       }
@@ -629,9 +635,9 @@
         padding: 7px 10px;
         background: #10161c;
         color: #fff;
-        border: 1px solid #fff;
+        border: 1px solid rgba(255,255,255,0.12);
         border-radius: 4px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.45);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
         font: 400 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
         forced-color-adjust: none;
       }
@@ -640,15 +646,15 @@
       .actions { display: flex; gap: 6px; margin-left: auto; }
       button {
         font: inherit;
-        color: #10161c;
-        background: #fff;
-        border: 1px solid #fff;
-        border-radius: 3px;
-        padding: 2px 7px;
+        color: #fff;
+        background: rgba(255,255,255,0.12);
+        border: 1px solid rgba(255,255,255,0.3);
+        border-radius: 4px;
+        padding: 3px 9px;
         cursor: pointer;
         forced-color-adjust: none;
       }
-      button:hover { background: #dbe4ec; }
+      button:hover { background: rgba(255,255,255,0.24); border-color: rgba(255,255,255,0.5); }
     `;
 
     const chip = document.createElement('div');
@@ -660,18 +666,34 @@
     chipNote = document.createElement('span');
     chipNote.className = 'note';
 
+    // Chip buttons mirror the panel's controls and use the same labels and
+    // tooltips, so the two surfaces read as one tool.
     const actions = document.createElement('div');
     actions.className = 'actions';
-    actions.append(button('mode', 'alt+shift+m', cycleMode));
+    actions.append(
+      button('Detail', 'Cycle row detail: level, then component, then selector (Alt+Shift+M)', cycleMode)
+    );
     // The panel only exists in the top frame, so only offer its toggle there.
     // The chip stays visible when the panel is hidden, so it's the way back.
     if (isTopFrame()) {
-      chipPanelBtn = button(panelHidden ? 'show panel' : 'hide panel', 'alt+shift+p', togglePanel);
+      chipPanelBtn = button(
+        panelHidden ? 'Show panel' : 'Hide panel',
+        panelHidden
+          ? 'Show the outline panel (Alt+Shift+P)'
+          : 'Hide the panel, keep the boxes (Alt+Shift+P)',
+        togglePanel
+      );
       actions.append(chipPanelBtn);
     }
     actions.append(
-      button('copy outline', 'alt+shift+c', () => copy(outlineText())),
-      button('close', 'esc', off)
+      button(
+        'Copy outline',
+        'Copy the whole outline as indented text: the page URL, the counts, and ' +
+          'every heading by level with its flags. Good for pasting into a bug report ' +
+          'or audit note. (Alt+Shift+C)',
+        () => copy(outlineText())
+      ),
+      button('Close', 'Close the whole tool (Esc when the panel is hidden)', off)
     );
 
     chip.append(chipText, chipNote, actions);
@@ -679,11 +701,11 @@
     mount(chipHost);
   }
 
-  function button(label, hint, fn) {
+  function button(label, title, fn) {
     const b = document.createElement('button');
     b.type = 'button';
     b.textContent = label;
-    b.title = `${label} (${hint})`;
+    b.title = title;
     b.tabIndex = -1;
     b.addEventListener('click', (e) => {
       e.preventDefault();
@@ -718,9 +740,8 @@
   // Unlike the overlay and chip, the panel is the tool's own operable UI, so
   // it's NOT aria-hidden. An auditor who uses a screen reader or the keyboard
   // has to be able to drive it. The cost is that it adds focus stops and a
-  // landmark to the page under test. The Quiet toggle (Alt+Shift+Q) makes the
-  // whole tool inert + aria-hidden on demand, so the page's own tab order and
-  // accessibility tree can be tested clean.
+  // landmark to the page under test while it's open, so to audit the page's own
+  // tab order or screen-reader output, close the tool (Esc) first.
   function buildPanel() {
     panelHost = document.createElement('div');
     panelHost.id = PANEL_ID;
@@ -737,11 +758,16 @@
         forced-color-adjust: none;
         --bg: #ffffff; --fg: #14181d; --muted: #5a6672; --line: #d7dde3;
         --rowhover: #eef2f6; --panelw: 340px;
+        /* Flag text colors, darkened enough to clear 4.5:1 on the white panel.
+           The lighter shades used before failed contrast in the light theme. */
+        --flag-v: #c1121f; --flag-a: #8a6300;
       }
       @media (prefers-color-scheme: dark) {
         :host {
           --bg: #10161c; --fg: #eef2f6; --muted: #9aa7b3; --line: #2a343d;
           --rowhover: #1b2530;
+          /* Lightened for the dark panel, where they clear 4.5:1 the other way. */
+          --flag-v: #ff6b74; --flag-a: #e0a83a;
         }
       }
       * { box-sizing: border-box; }
@@ -750,22 +776,19 @@
         width: var(--panelw); height: 100%;
         background: var(--bg); color: var(--fg);
         border-left: 1px solid var(--line);
-        box-shadow: -2px 0 14px rgba(0,0,0,0.28);
+        box-shadow: -1px 0 6px rgba(0,0,0,0.14);
         font: 400 13px/1.45 system-ui, -apple-system, Segoe UI, sans-serif;
         forced-color-adjust: none;
       }
-      :host(.collapsed) .panel { width: auto; }
-      :host(.collapsed) .body { display: none; }
       .grip {
         position: absolute; left: -3px; top: 0; width: 6px; height: 100%;
         cursor: ew-resize; touch-action: none;
       }
-      :host(.collapsed) .grip { display: none; }
       header {
         display: flex; align-items: center; gap: 8px;
         padding: 8px 10px; border-bottom: 1px solid var(--line);
       }
-      .title { font-weight: 700; font-size: 12px; letter-spacing: .02em; white-space: nowrap; }
+      .title { font-weight: 700; font-size: 12px; white-space: nowrap; }
       .spacer { margin-left: auto; }
       .iconbtn {
         font: inherit; font-size: 12px; color: var(--fg);
@@ -773,18 +796,26 @@
         border-radius: 4px; padding: 3px 7px; cursor: pointer;
       }
       .iconbtn:hover { background: var(--rowhover); }
-      .iconbtn[aria-pressed="true"] { background: #c1121f; color: #fff; border-color: #c1121f; }
+      /* One consistent focus ring on every button, matching the rows. */
+      .iconbtn:focus-visible, .seg button:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
       .controls { padding: 8px 10px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
-      .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+      .detail { display: flex; align-items: center; gap: 8px; }
+      .detail-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+      .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
       .seg button {
         font: inherit; font-size: 12px; color: var(--fg); background: transparent;
         border: 0; border-right: 1px solid var(--line); padding: 4px 8px; cursor: pointer;
       }
       .seg button:last-child { border-right: 0; }
-      .seg button[aria-pressed="true"] { background: #0b5fbe; color: #fff; }
+      /* Neutral inverted fill for the chosen radio. */
+      .seg button[aria-checked="true"] { background: var(--fg); color: var(--bg); }
+      .sr-only {
+        position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+        overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+      }
       .summary { font-size: 12px; color: var(--muted); }
-      .summary .v { color: #c1121f; font-weight: 700; }
-      .summary .a { color: #b8860b; font-weight: 700; }
+      .summary .v { color: var(--flag-v); font-weight: 700; }
+      .summary .a { color: var(--flag-a); font-weight: 700; }
       .body { overflow: auto; flex: 1 1 auto; }
       ul { list-style: none; margin: 0; padding: 4px 0; }
       .row {
@@ -794,9 +825,9 @@
         padding: 4px 10px 4px 0; cursor: pointer;
       }
       .row:hover { background: var(--rowhover); }
-      .row:focus-visible { outline: 2px solid #0b5fbe; outline-offset: -2px; }
-      .row[data-flag="advisory"] { border-left-color: #b8860b; }
-      .row[data-flag="violation"] { border-left-color: #c1121f; }
+      .row:focus-visible { outline: 2px solid var(--fg); outline-offset: -2px; }
+      .row[data-flag="advisory"] { border-left-color: var(--flag-a); }
+      .row[data-flag="violation"] { border-left-color: var(--flag-v); }
       .lvl {
         flex: none; min-width: 26px; text-align: center;
         color: #fff; border-radius: 3px; font: 700 11px/1.5 ui-monospace, Menlo, monospace;
@@ -806,9 +837,26 @@
       .txt.empty { color: var(--muted); font-style: italic; }
       .more { flex: none; color: var(--muted); font: 400 11px/1.5 ui-monospace, Menlo, monospace; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .rowflags { flex: none; font-size: 11px; font-weight: 700; white-space: nowrap; }
-      .rowflags.violation { color: #ff6b74; }
-      .rowflags.advisory { color: #e0a83a; }
+      .rowflags.violation { color: var(--flag-v); }
+      .rowflags.advisory { color: var(--flag-a); }
+      .foot {
+        border-top: 1px solid var(--line); padding: 7px 10px;
+        display: flex; gap: 16px; font-size: 11px; color: var(--muted);
+      }
+      .foot .k { display: inline-flex; align-items: center; gap: 5px; }
+      .foot .g { font-weight: 700; font-family: ui-monospace, Menlo, monospace; }
+      .foot .g.v { color: var(--flag-v); }
+      .foot .g.a { color: var(--flag-a); }
       .empty-list { padding: 16px 12px; color: var(--muted); }
+      /* Tooltip that appears on hover AND keyboard focus (native title only
+         fires on hover, so keyboard users never saw it). */
+      .tip {
+        position: fixed; z-index: 3; max-width: 240px;
+        background: var(--fg); color: var(--bg);
+        padding: 5px 8px; border-radius: 4px; font-size: 11px; line-height: 1.4;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.3); pointer-events: none;
+      }
+      .tip[hidden] { display: none; }
       @media (forced-colors: active) {
         .lvl { forced-color-adjust: none; }
       }
@@ -821,61 +869,156 @@
 
     const grip = document.createElement('div');
     grip.className = 'grip';
+    grip.title = 'Drag to resize the panel';
     grip.addEventListener('pointerdown', startResize);
 
-    // Header: title, collapse, close.
+    // Header: title, then Hide (dismiss the panel, keep the boxes) and Close
+    // (shut the whole tool). Collapse used to live here too, but it did nearly
+    // the same job as Hide, so there's now one dismiss concept, not two.
     const head = document.createElement('header');
     const title = document.createElement('span');
     title.className = 'title';
     title.textContent = 'Heading outline';
     const spacer = document.createElement('span');
     spacer.className = 'spacer';
-    const collapseBtn = iconButton('Collapse', () => setCollapsed(!panelCollapsed));
-    collapseBtn.dataset.role = 'collapse';
+    const hideBtn = iconButton('Hide', togglePanel);
+    hideBtn.dataset.tip = 'Hide the panel, keep the boxes (Alt+Shift+P)';
     const closeBtn = iconButton('Close', off);
-    head.append(title, spacer, collapseBtn, closeBtn);
+    closeBtn.dataset.tip = 'Close the whole tool (Esc when the panel is hidden)';
+    head.append(title, spacer, hideBtn, closeBtn);
 
-    // Controls: detail segmented control + quiet toggle.
+    // Controls: labeled detail segmented control, then Copy outline.
     const controls = document.createElement('div');
     controls.className = 'controls';
 
+    // A one-of-three picker, so it's a radio group, not toggle buttons. Radios
+    // tell assistive tech that choosing one clears the others; aria-pressed
+    // (toggle) would say each is independently on or off.
     const seg = document.createElement('div');
     seg.className = 'seg';
-    seg.setAttribute('role', 'group');
-    seg.setAttribute('aria-label', 'Row detail');
+    seg.setAttribute('role', 'radiogroup');
     for (const d of DETAILS) {
       const b = document.createElement('button');
       b.type = 'button';
+      b.setAttribute('role', 'radio');
+      b.setAttribute('aria-checked', 'false');
       b.textContent = d.label;
       b.dataset.mode = d.mode;
+      b.dataset.tip = `Row detail: ${d.label} (arrow keys move, Alt+Shift+M cycles)`;
       b.addEventListener('click', () => setMode(d.mode));
       seg.append(b);
     }
-
-    const quietBtn = iconButton('Quiet (test page a11y)', () => setQuiet(!quiet));
-    quietBtn.dataset.role = 'quiet';
-    quietBtn.setAttribute('aria-pressed', 'false');
-    quietBtn.title = 'Make the tool inert + aria-hidden so the page’s own tab order and screen-reader output can be tested (Alt+Shift+Q)';
+    // Radio-group arrow keys: move and select, so the group is a single tab stop.
+    seg.addEventListener('keydown', (e) => {
+      const btns = [...seg.querySelectorAll('button')];
+      const i = btns.indexOf(panelHost.shadowRoot.activeElement);
+      if (i < 0) return;
+      let ni = i;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') ni = (i + 1) % btns.length;
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') ni = (i - 1 + btns.length) % btns.length;
+      else if (e.key === 'Home') ni = 0;
+      else if (e.key === 'End') ni = btns.length - 1;
+      else return;
+      e.preventDefault();
+      setMode(btns[ni].dataset.mode);
+      btns[ni].focus();
+    });
+    // A visible label, tied to the group so it is the group's accessible name.
+    // A tooltip would not be, since tooltips aren't an accessible way to convey it.
+    const detail = document.createElement('div');
+    detail.className = 'detail';
+    const detailLabel = document.createElement('span');
+    detailLabel.className = 'detail-label';
+    detailLabel.id = 'sho-detail-label';
+    detailLabel.textContent = 'Detail';
+    seg.setAttribute('aria-labelledby', detailLabel.id);
+    detail.append(detailLabel, seg);
 
     const copyBtn = iconButton('Copy outline', () => copy(outlineText()));
+    copyBtn.dataset.tip =
+      'Copy the whole outline as indented text: the page URL, the counts, and ' +
+      'every heading by level with its flags. Good for pasting into a bug report ' +
+      'or audit note. (Alt+Shift+C)';
 
     const controlRow = document.createElement('div');
     controlRow.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap';
-    controlRow.append(seg, quietBtn, copyBtn);
+    controlRow.append(detail, copyBtn);
 
+    // Not a live region: it re-renders on every rescan, and announcing the
+    // counts on each mutation would make a screen reader chatty on dynamic pages.
     panelSummary = document.createElement('div');
     panelSummary.className = 'summary';
-    panelSummary.setAttribute('role', 'status');
-    panelSummary.setAttribute('aria-live', 'polite');
 
-    controls.append(controlRow, panelSummary);
+    // Visually-hidden live region for one-off confirmations (Copied, etc.). The
+    // flash chip is aria-hidden, so this is how a screen-reader user hears them.
+    panelStatus = document.createElement('div');
+    panelStatus.className = 'sr-only';
+    panelStatus.setAttribute('aria-live', 'polite');
+
+    controls.append(controlRow, panelSummary, panelStatus);
 
     const body = document.createElement('div');
     body.className = 'body';
     panelList = document.createElement('ul');
+    panelList.setAttribute('role', 'tree');
+    panelList.setAttribute('aria-label', 'Heading outline');
+    // Tree arrow keys: move focus between rows, so the list is one tab stop and
+    // Up/Down walk the headings. Enter/Space still activate (scroll to it).
+    panelList.addEventListener('keydown', (e) => {
+      const rows = [...panelList.querySelectorAll('.row')];
+      if (!rows.length) return;
+      const i = rows.indexOf(panelHost.shadowRoot.activeElement);
+      let ni = i;
+      if (e.key === 'ArrowDown') ni = i < 0 ? 0 : Math.min(i + 1, rows.length - 1);
+      else if (e.key === 'ArrowUp') ni = i < 0 ? 0 : Math.max(i - 1, 0);
+      else if (e.key === 'Home') ni = 0;
+      else if (e.key === 'End') ni = rows.length - 1;
+      else return;
+      e.preventDefault();
+      rows.forEach((r, j) => (r.tabIndex = j === ni ? 0 : -1));
+      rows[ni].focus();
+    });
     body.append(panelList);
 
-    panel.append(grip, head, controls, body);
+    // Legend: what the two flag tiers mean. A violation is a WCAG failure an
+    // automated checker reports; an advisory is a best-practice finding.
+    const foot = document.createElement('footer');
+    foot.className = 'foot';
+    foot.innerHTML =
+      '<span class="k"><span class="g v" aria-hidden="true">✕</span> Violation (WCAG fail)</span>' +
+      '<span class="k"><span class="g a" aria-hidden="true">⚠</span> Advisory (best practice)</span>';
+
+    // A tooltip that fires on hover AND keyboard focus, for any [data-tip]
+    // control. Native title only shows on hover, so keyboard users never saw it.
+    tipEl = document.createElement('div');
+    tipEl.className = 'tip';
+    tipEl.id = 'sho-tip';
+    tipEl.setAttribute('role', 'tooltip');
+    tipEl.hidden = true;
+    const showTip = (t) => {
+      if (!t || !t.dataset.tip) return;
+      tipEl.textContent = t.dataset.tip;
+      tipEl.hidden = false;
+      const r = t.getBoundingClientRect();
+      const tr = tipEl.getBoundingClientRect();
+      let top = r.top - tr.height - 6;
+      if (top < 4) top = r.bottom + 6; // flip below if no room above
+      const left = Math.max(6, Math.min(r.left, innerWidth - tr.width - 6));
+      tipEl.style.top = `${top}px`;
+      tipEl.style.left = `${left}px`;
+      t.setAttribute('aria-describedby', tipEl.id);
+    };
+    const hideTip = (t) => {
+      tipEl.hidden = true;
+      if (t && t.removeAttribute) t.removeAttribute('aria-describedby');
+    };
+    const tipTarget = (e) => (e.target.closest ? e.target.closest('[data-tip]') : null);
+    panel.addEventListener('focusin', (e) => showTip(tipTarget(e)));
+    panel.addEventListener('focusout', (e) => hideTip(tipTarget(e)));
+    panel.addEventListener('pointerover', (e) => showTip(tipTarget(e)));
+    panel.addEventListener('pointerout', (e) => hideTip(tipTarget(e)));
+
+    panel.append(grip, head, controls, body, foot, tipEl);
     shadow.append(style, panel);
     mount(panelHost);
     updateDetailControl();
@@ -893,27 +1036,27 @@
     return b;
   }
 
-  function setCollapsed(v) {
-    panelCollapsed = v;
-    if (!panelHost) return;
-    panelHost.classList.toggle('collapsed', v);
-    const btn = panelHost.shadowRoot.querySelector('[data-role="collapse"]');
-    if (btn) btn.textContent = v ? 'Expand' : 'Collapse';
-  }
-
   function togglePanel() {
     setPanelHidden(!panelHidden);
   }
 
-  // Hide the sidebar entirely while leaving the boxes and chip in place. Unlike
-  // Collapse, which leaves a tab, this removes the panel from view completely.
-  // The chip's button and Alt+Shift+P bring it back.
+  // Hide the sidebar entirely while leaving the boxes and chip in place. This
+  // removes the panel from view completely; the chip button and Alt+Shift+P
+  // bring it back.
   function setPanelHidden(v) {
     panelHidden = v;
     if (panelHost) panelHost.style.display = v ? 'none' : '';
     if (chipPanelBtn) {
-      chipPanelBtn.textContent = v ? 'show panel' : 'hide panel';
-      chipPanelBtn.title = `${v ? 'show panel' : 'hide panel'} (alt+shift+p)`;
+      chipPanelBtn.textContent = v ? 'Show panel' : 'Hide panel';
+      chipPanelBtn.title = v
+        ? 'Show the outline panel (Alt+Shift+P)'
+        : 'Hide the panel, keep the boxes (Alt+Shift+P)';
+    }
+    // When the panel comes back, land focus on it so a keyboard user returns to
+    // the panel rather than being stranded on the body where they hid it.
+    if (!v && panelHost) {
+      const first = panelHost.shadowRoot.querySelector('header .iconbtn');
+      if (first) first.focus();
     }
   }
 
@@ -940,7 +1083,11 @@
   function updateDetailControl() {
     if (!panelHost) return;
     for (const b of panelHost.shadowRoot.querySelectorAll('.seg button')) {
-      b.setAttribute('aria-pressed', b.dataset.mode === labelMode ? 'true' : 'false');
+      const on = b.dataset.mode === labelMode;
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+      // Roving tabindex: only the chosen radio is in the tab order; arrows reach
+      // the rest. That's the radio-group keyboard pattern.
+      b.tabIndex = on ? 0 : -1;
     }
   }
 
@@ -978,11 +1125,18 @@
       return;
     }
 
+    let rowIdx = 0;
     for (const item of items) {
       const li = document.createElement('li');
+      li.setAttribute('role', 'none');
       const row = document.createElement('button');
       row.type = 'button';
       row.className = 'row';
+      row.setAttribute('role', 'treeitem');
+      row.setAttribute('aria-level', String(item.level));
+      // Roving tabindex: the first row is the list's single tab stop, arrows
+      // reach the rest.
+      row.tabIndex = rowIdx === 0 ? 0 : -1;
       const tier = worstTier(item);
       if (tier) row.dataset.flag = tier;
       row.style.paddingLeft = `${8 + (Math.min(item.level, 6) - 1) * 14}px`;
@@ -1029,11 +1183,13 @@
       }
       if (item.fromAria) aria.push('level from aria-level');
       row.setAttribute('aria-label', aria.join(', '));
+      row.title = 'Scroll to this heading';
 
       row.__shoItem = item;
       row.addEventListener('click', () => goTo(item));
       li.append(row);
       panelList.append(li);
+      rowIdx++;
     }
   }
 
@@ -1041,7 +1197,6 @@
   // the element itself works even when it's in a closed root), then pulse a
   // highlight over it.
   function goTo(item) {
-    if (quiet) setQuiet(false);
     const el = item.el;
     if (!el || !el.isConnected) return;
     try {
@@ -1062,29 +1217,6 @@
     }, 1400);
   }
   let flashTimer2 = 0;
-
-  function setQuiet(v) {
-    quiet = v;
-    for (const host of [layerHost, chipHost, panelHost]) {
-      if (!host) continue;
-      if (v) {
-        host.setAttribute('inert', '');
-        host.setAttribute('aria-hidden', 'true');
-        host.style.setProperty('opacity', '0.35', 'important');
-      } else {
-        host.removeAttribute('inert');
-        host.style.removeProperty('opacity');
-        // The layer and chip are always aria-hidden by design, so only the
-        // panel goes back to being exposed.
-        if (host === panelHost) host.removeAttribute('aria-hidden');
-      }
-    }
-    if (panelHost) {
-      const btn = panelHost.shadowRoot.querySelector('[data-role="quiet"]');
-      if (btn) btn.setAttribute('aria-pressed', v ? 'true' : 'false');
-    }
-    if (!v) flash('Tool re-enabled');
-  }
 
   function poolAt(pool, cls) {
     const el = document.createElement('div');
@@ -1296,7 +1428,11 @@
     if (!on) return;
     if (e.key === 'Alt' || e.altKey) setAlt(true);
     if (e.key === 'Escape') {
-      off();
+      // Progressive dismiss: first Esc hides the panel (boxes stay), so a user
+      // who tabbed into the panel doesn't lose everything. A second Esc, or Esc
+      // with the panel already hidden, closes the whole tool.
+      if (isTopFrame() && panelHost && !panelHidden) setPanelHidden(true);
+      else off();
       return;
     }
     if (e.altKey && e.shiftKey) {
@@ -1307,9 +1443,6 @@
       } else if (k === 'c') {
         e.preventDefault();
         copy(outlineText());
-      } else if (k === 'q') {
-        e.preventDefault();
-        setQuiet(!quiet);
       } else if (k === 'p') {
         e.preventDefault();
         togglePanel();
@@ -1339,7 +1472,6 @@
 
   function start() {
     on = true;
-    quiet = false;
     panelHidden = false;
     if (!layerHost) buildLayer();
     if (!chipHost) buildChip();

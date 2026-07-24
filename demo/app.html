@@ -3,54 +3,149 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Demo: a shadow-DOM app with heading defects</title>
+<title>Demo: a docs article in nested closed shadow DOM</title>
 <style>
-  :root { color-scheme: light dark; }
-  body {
-    margin: 0;
-    font: 15px/1.6 system-ui, -apple-system, Segoe UI, sans-serif;
-    color: #14181d; background: #f4f6f8;
+  :root {
+    color-scheme: light dark;
+    --bg:#ffffff; --surface:#ffffff; --text:#1a1f24; --muted:#5b6570;
+    --line:#e6e8eb; --accent:#2e9e6b; --prose:#2b3138;
   }
   @media (prefers-color-scheme: dark) {
-    body { color: #eef2f6; background: #0c1116; }
+    :root {
+      --bg:#0d1116; --surface:#11161c; --text:#e8ecf1; --muted:#9aa4af;
+      --line:#232a31; --accent:#3ecf8e; --prose:#c3cad2;
+    }
+  }
+  body {
+    margin:0; background:var(--bg); color:var(--text);
+    font:15px/1.65 system-ui, -apple-system, "Segoe UI", sans-serif;
   }
 </style>
 </head>
 <body>
 <!--
-  Every heading below the top banner lives inside a CLOSED shadow root, nested
-  several components deep. Page scripts (and most heading extensions) read
-  element.shadowRoot === null here and see nothing. The extension's privileged
-  chrome.dom.openOrClosedShadowRoot reaches all of it.
+  Every heading below the top bar lives inside a CLOSED shadow root. The article
+  is assembled from one recursive <doc-node> component, so a section sits three
+  closed roots deep and a subsection four deep. Page scripts (and most heading
+  tools) read element.shadowRoot === null here and see nothing.
 
-  Two defects are planted for the audit:
-   - the pricing card jumps h2 -> h4 (skipped-level advisory)
-   - the "settings" panel has an empty <h3> (empty-heading violation)
+  Two heading defects are planted in the prose:
+   - "Team access" jumps from h2 to h4 (skipped level)
+   - the last section has an empty <h3> (empty-heading violation)
 -->
 <app-shell></app-shell>
 
 <script type="module">
+  // The article as data. Each entry becomes one <doc-node>, i.e. one closed
+  // shadow root, so children nest as deeper roots.
+  const CONTENT = {
+    article: {
+      level: 1,
+      h: 'How Meridian structures its documentation',
+      byline: 'Updated Aug 1 · 6 min read',
+      body: [
+        'Our docs are assembled from small components, each with its own shadow root. That keeps styles isolated, but it also means a heading can sit several roots deep, which is exactly where most outlining tools stop looking.',
+        'This page is a worked example. Every heading below the title lives inside a nested component, and two of them are wrong on purpose so the audit has something to catch.',
+      ],
+      children: ['background', 'nesting', 'plans', 'notes'],
+    },
+    background: {
+      level: 2,
+      h: 'Background',
+      body: [
+        'Headings are the backbone of a page. People who navigate by screen reader jump between them, and a clean outline is often the fastest way to understand a long document without reading every word.',
+        'When that outline is built from components rather than a single template, the levels have to be assigned by hand. That is where mistakes creep in, and they are hard to see by eye because the page still looks fine.',
+      ],
+    },
+    nesting: {
+      level: 2,
+      h: 'How components nest',
+      body: [
+        'Each section on this page is its own element. Sections can contain subsections, and subsections can contain more, so the tree gets deep quickly even though the writing reads flat.',
+      ],
+      children: ['openclosed', 'order'],
+    },
+    openclosed: {
+      level: 3,
+      h: 'Open and closed roots',
+      body: [
+        'A closed root hides its contents from ordinary page scripts. That is good for encapsulation and awkward for any tool that has to read the page from the outside, since the usual entry point returns nothing.',
+      ],
+    },
+    order: {
+      level: 3,
+      h: 'Reading order',
+      body: [
+        'The outline follows the composed tree: a host, then its shadow content, then its light children. Slotted content is the one case where the painted order and the outline can disagree, so it is worth checking by hand.',
+      ],
+    },
+    plans: {
+      level: 2,
+      h: 'Plans and access',
+      body: [
+        'Access to the internal docs depends on your plan. Most teams are on the standard tier, which covers everything on this page.',
+      ],
+      children: ['team'],
+    },
+    team: {
+      // Planted defect: jumps from the h2 above straight to h4.
+      level: 4,
+      h: 'Team access',
+      body: [
+        'Team plans add shared drafts and review workflows. This heading jumps from level two to level four with no level three between them, which the audit flags as a skipped level.',
+      ],
+    },
+    notes: {
+      level: 2,
+      h: 'Notes',
+      body: ['A few loose ends that did not fit anywhere above.'],
+      children: ['nameless'],
+    },
+    nameless: {
+      // Planted defect: an empty heading.
+      level: 3,
+      h: '',
+      body: [
+        'The heading directly above this paragraph has no text at all. An empty heading is a violation: it announces a section to a screen reader and then turns out to be nameless.',
+      ],
+    },
+  };
+
+  // Shared styles, injected into every root. Custom properties inherit through
+  // shadow boundaries, so the palette is defined once on :root above. Declared
+  // before the components, since defining app-shell upgrades it and its render
+  // reads css right away.
   const css = `
     :host { display: block; }
     * { box-sizing: border-box; }
-    h1,h2,h3,h4,h5,h6 { margin: 0 0 .3em; }
-    .wrap { display: grid; grid-template-columns: 220px 1fr; gap: 0; min-height: 100vh; }
-    header.top {
-      grid-column: 1 / -1; padding: 18px 24px; color: #fff;
-      background: linear-gradient(90deg,#0b5fbe,#7b1fa2);
+    .topbar {
+      display: flex; align-items: center; height: 52px; padding: 0 22px;
+      border-bottom: 1px solid var(--line); background: var(--surface);
     }
-    nav { padding: 18px; border-right: 1px solid #d7dde3; background: #fff; }
-    @media (prefers-color-scheme: dark){ nav{ background:#121a22; border-color:#2a343d; } }
-    main { padding: 24px; display: grid; gap: 18px; grid-template-columns: 1fr 1fr; }
-    .card {
-      background: #fff; border: 1px solid #d7dde3; border-radius: 10px; padding: 18px;
+    .brand { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 14px; }
+    .logo {
+      width: 22px; height: 22px; border-radius: 6px;
+      background: var(--text); color: var(--bg);
+      display: grid; place-items: center; font-size: 12px; font-weight: 700;
     }
-    @media (prefers-color-scheme: dark){ .card{ background:#121a22; border-color:#2a343d; } }
-    .muted { color: #5a6672; }
-    ul { margin: .3em 0 0; padding-left: 1.1em; }
+    .session {
+      margin-left: 14px; padding-left: 14px; border-left: 1px solid var(--line);
+      display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px;
+    }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+    .main { padding: 46px 48px 120px; }
+    .article { max-width: 720px; }
+    h1 { font-size: 30px; line-height: 1.2; font-weight: 650; letter-spacing: -0.015em; margin: 0 0 10px; }
+    .byline { color: var(--muted); font-size: 14px; margin: 0 0 40px; }
+    h2 {
+      font-size: 21px; font-weight: 600; letter-spacing: -0.01em;
+      margin: 48px 0 14px; padding-top: 22px; border-top: 1px solid var(--line);
+    }
+    h3 { font-size: 16px; font-weight: 600; margin: 36px 0 12px; }
+    h4 { font-size: 15px; font-weight: 600; margin: 32px 0 10px; }
+    p { margin: 0 0 18px; color: var(--prose); max-width: 68ch; }
   `;
 
-  // Helper: define a custom element that mounts a CLOSED shadow root.
   function closed(tag, render) {
     customElements.define(tag, class extends HTMLElement {
       connectedCallback() {
@@ -67,66 +162,23 @@
 
   closed('app-shell', (el) => {
     el.innerHTML = `
-      <div class="wrap">
-        <header class="top">
-          <h1>Acme Console</h1>
-          <p class="muted" style="color:#e8ecf1">Signed in as Dana · Production</p>
-        </header>
-        <nav><side-nav></side-nav></nav>
-        <main>
-          <billing-card></billing-card>
-          <usage-card></usage-card>
-          <settings-card></settings-card>
-        </main>
-      </div>`;
+      <header class="topbar">
+        <span class="brand"><span class="logo">M</span>Meridian Docs</span>
+        <span class="session"><span class="dot"></span>Signed in as Em · Production</span>
+      </header>
+      <div class="main"><div class="article"><doc-node data-key="article"></doc-node></div></div>`;
   });
 
-  closed('side-nav', (el) => {
-    el.innerHTML = `
-      <h2>Navigation</h2>
-      <nav-section data-title="Workspace"></nav-section>
-      <nav-section data-title="Account"></nav-section>`;
-  });
-
-  // nav-section holds a closed root, and inside it another closed root for the
-  // list, so headings end up four closed roots deep from the document.
-  closed('nav-section', (el, root) => {
-    const title = root.host.getAttribute('data-title') || 'Section';
-    el.innerHTML = `<h3>${title}</h3><nav-links></nav-links>`;
-  });
-  closed('nav-links', (el) => {
-    el.innerHTML = `
-      <h4>Quick links</h4>
-      <ul><li>Overview</li><li>Members</li><li>Audit log</li></ul>`;
-  });
-
-  closed('billing-card', (el) => {
-    // Deliberate defect: h2 then h4, skipping h3.
-    el.innerHTML = `
-      <div class="card">
-        <h2>Billing</h2>
-        <h4>Current plan</h4>
-        <p class="muted">Team · $80 / month</p>
-      </div>`;
-  });
-
-  closed('usage-card', (el) => {
-    el.innerHTML = `
-      <div class="card">
-        <h2>Usage</h2>
-        <h3>This month</h3>
-        <p class="muted">1.2M requests · 340 GB egress</p>
-      </div>`;
-  });
-
-  closed('settings-card', (el) => {
-    // Deliberate defect: an empty heading (no accessible name).
-    el.innerHTML = `
-      <div class="card">
-        <h2>Settings</h2>
-        <h3></h3>
-        <p class="muted">This h3 is empty, which the audit flags as a violation.</p>
-      </div>`;
+  // One recursive component. Reads its key, renders its heading and prose, then
+  // mounts a child <doc-node> per child, each a new closed root.
+  closed('doc-node', (el, root) => {
+    const n = CONTENT[root.host.getAttribute('data-key')] || { level: 2, h: '', body: [] };
+    const tag = 'h' + n.level;
+    let html = `<${tag}>${n.h}</${tag}>`;
+    if (n.byline) html += `<p class="byline">${n.byline}</p>`;
+    for (const p of n.body) html += `<p>${p}</p>`;
+    for (const c of n.children || []) html += `<doc-node data-key="${c}"></doc-node>`;
+    el.innerHTML = html;
   });
 </script>
 </body>
