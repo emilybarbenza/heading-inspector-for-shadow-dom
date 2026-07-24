@@ -44,7 +44,7 @@ const page = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Headings Bookmarklet for Shadow DOM bookmarklet</title>
+<title>Heading Inspector for Shadow DOM (bookmarklet)</title>
 <style>
   body { font: 16px/1.6 system-ui, sans-serif; max-width: 46rem; margin: 3rem auto; padding: 0 1rem; }
   a.bm { display: inline-block; padding: .5rem .9rem; border: 2px solid currentColor; border-radius: 4px; font-weight: 700; text-decoration: none; }
@@ -52,7 +52,7 @@ const page = `<!doctype html>
 </style>
 </head>
 <body>
-<h1>Headings Bookmarklet for Shadow DOM</h1>
+<h1>Heading Inspector for Shadow DOM</h1>
 <p>Drag this link to your bookmarks bar, then click it on any page to toggle heading outlines.</p>
 <p><a class="bm" href="${bookmarklet.replace(/"/g, '&quot;')}">Heading outlines</a></p>
 <h2>Limitations of the bookmarklet</h2>

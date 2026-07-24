@@ -13,7 +13,7 @@
 
   const walker = window.__shadowWalker;
   if (!walker) {
-    console.error('Headings Bookmarklet for Shadow DOM: walker.js did not load.');
+    console.error('Heading Inspector for Shadow DOM: walker.js did not load.');
     return;
   }
 
