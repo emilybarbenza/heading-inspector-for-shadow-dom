@@ -1,32 +1,31 @@
-# Headings bookmarklet for shadow DOM
+# Heading inspector for shadow DOM
 
-Outlines, labels, lists, and audits every heading on a page. It finds headings even when they're nested deep inside **open or closed** shadow roots.
+This visual tool outlines, labels, lists, and performs accessibility checks for every heading on a webpage. It finds headings even when they're nested deep inside **open or closed** shadow roots, which is common for modern web applications.
 
-Most heading extensions stop at the first closed root, because a content script that reads `element.shadowRoot` gets `null` there. Extensions have a privileged API that page scripts don't, so this tool uses it.
+Most heading extensions and bookmarlets stop at the first closed root, because a content script that reads `element.shadowRoot` gets `null` there.
 
-Three surfaces, all built on one shadow-piercing walk:
+This tool was designed with accessibility testers and engineers in mind, and is ideal for capturing heading structure details for defect reports, accessibility demos, and more.
 
-- **In-place overlay**: a colored, labeled box on every heading, good for defect screenshots.
-- **Outline sidebar**: a docked, keyboard-operable tree of the headings in reading order. Click a row to scroll to it and flash it.
-- **Hierarchy audit**: WCAG-keyed flags for empty headings, skipped levels, and missing or duplicate `h1`, split into violations and best-practice advisories.
+The interface consists of:
+
+- **On-page annotation**: a color-coded, labeled box around each heading, good for defect screenshots.
+- **Sidebar**: a docked, keyboard-operable tree of the headings in reading order. Select a heading in the tree to scroll to it and flash it.
+- **Hierarchy audit**: WCAG-keyed flags for empty headings, skipped levels, and missing or duplicate `h1`, split into WCAG violations and best-practice advisories.
 
 ![Every heading in a demo docs article boxed and labeled by level, with the outline sidebar open on the right showing the same headings as an indented tree](docs/images/overlay-hero.png)
 
-## Privacy
+## How to install
 
-No network requests. No `host_permissions`, no content scripts registered against any URL. The walker only runs in the tab you click on, and only when you click. The one thing stored is your label-detail preference in `chrome.storage.local`. Nothing leaves the browser.
-
-## Install
-
-1. `chrome://extensions` → enable the Developer mode switch
+1. Navigate to `chrome://extensions`
+2. Enable the **Developer mode** switch
 
    ![The chrome://extensions page with the Developer mode switch on and the Load unpacked button highlighted](docs/images/chrome-extensions-page.png)
 
-2. Select the Load unpacked button
-3. Select the `extension/` directory
-4. Open the puzzle-piece menu and pin **Headings Bookmarklet for Shadow DOM** so its icon
+3. Select the **Load unpacked** button
+4. Select the `extension/` directory
+5. Open the puzzle-piece menu and pin **Heading Inspector for Shadow DOM** so its icon
    is on the toolbar
-5. Select the icon, or press `Alt+Shift+H`, to toggle it on a tab
+6. Select the icon, or press `Alt+Shift+H`, to toggle it on a tab
 
 Load the extension through `chrome://extensions`, not the `--load-extension` command-line
 switch: Chrome 137+ ignores unpacked extensions passed on the command line. For
@@ -34,7 +33,7 @@ an install-free look on a page built from *open* shadow roots, open
 `demo/standalone.html`. It loads the same walker and overlay as ordinary page
 scripts, no extension required (closed roots need the extension).
 
-## Use
+## How to use
 
 Each heading gets an outlined box and a label.
 
@@ -57,7 +56,7 @@ The chip at bottom-left reports counts, including the cases that can't be drawn 
 | `Alt+Shift+P` | Hide or show the outline panel. The boxes stay either way. |
 | `Alt`+click a box | Copy that heading's selector chain and console expression |
 
-## Outline sidebar
+### Sidebar
 
 A panel docks to the right of the top document. Each heading is one row, indented by level, in reading order. The outline is a `tree`: `Tab` into it, then the arrow keys walk the headings (`Home`/`End` jump to the ends), and `Enter`/`Space` activates a row. Each row carries its heading level as `aria-level`. Activating a row scrolls that heading into view and pulses a highlight over it, across shadow boundaries, since `scrollIntoView` on the element works even inside a closed root.
 
@@ -73,7 +72,7 @@ The panel sits over the right edge of the page instead of reflowing it. That's o
 
 *The panel follows the page's light or dark theme.*
 
-## Hierarchy audit
+### Hierarchy audit
 
 Findings come in two tiers, since an auditor files one as a defect and the other as a note:
 
@@ -122,6 +121,10 @@ If the chain crosses a closed root, the record says so, because the console expr
 - The panel is theme-aware (`prefers-color-scheme`), so it's legible over light or dark pages without washing out a screenshot.
 - `forced-color-adjust: none` on every box and label. Otherwise Windows High Contrast overrides `border-color` and flattens the level encoding.
 
+## Privacy
+
+No network requests. No `host_permissions`, no content scripts registered against any URL. The tool runs only in the tab you enable it from, and only when you enable the tool yourself. The one thing stored is your label-detail preference in `chrome.storage.local`. Nothing leaves the browser.
+
 ## Browser support
 
 | Environment | API | Closed roots |
@@ -141,7 +144,7 @@ Safari would need a different approach: patch `Element.prototype.attachShadow` i
 node build/build-bookmarklet.mjs
 ```
 
-Writes `dist/bookmarklet.html` with a drag-to-install link. This exists because extension installs are blocked by policy in a lot of government and finance environments, which is often exactly where you need to hand a heading tool to someone else's dev team. Open roots only, and the chip says so.
+Writes `dist/bookmarklet.html` with a drag-to-install link. This exists because extension installs are blocked by policy in many government and finance environments, which is often exactly where accessibility testing is performed.
 
 ## Tests
 
