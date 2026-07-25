@@ -140,7 +140,7 @@ test.describe('page world (bookmarklet equivalent)', () => {
     // The detail picker is a radio group with exactly one checked radio, not a
     // set of independent toggle buttons.
     const radio = await page.evaluate(() => {
-      const seg = document.getElementById('sho-panel-host').shadowRoot.querySelector('.seg');
+      const seg = document.getElementById('sho-panel-host').shadowRoot.querySelector('.seg:not(.dockseg)');
       const btns = [...seg.querySelectorAll('button')];
       return {
         group: seg.getAttribute('role'),
@@ -180,14 +180,14 @@ test.describe('page world (bookmarklet equivalent)', () => {
     // Radio group: roving tabindex (only the checked one is tabbable), and an
     // arrow key moves the selection.
     const rovingBefore = await page.evaluate(
-      (sr) => [...eval(sr).querySelectorAll('.seg button')].map((b) => b.tabIndex),
+      (sr) => [...eval(sr).querySelectorAll('.seg:not(.dockseg) button')].map((b) => b.tabIndex),
       sr
     );
     expect(rovingBefore).toEqual([0, -1, -1]);
-    await page.evaluate((sr) => eval(sr).querySelector('.seg button[aria-checked="true"]').focus(), sr);
+    await page.evaluate((sr) => eval(sr).querySelector('.seg:not(.dockseg) button[aria-checked="true"]').focus(), sr);
     await page.keyboard.press('ArrowRight');
     const radioAfter = await page.evaluate((sr) => {
-      const btns = [...eval(sr).querySelectorAll('.seg button')];
+      const btns = [...eval(sr).querySelectorAll('.seg:not(.dockseg) button')];
       return {
         checkedIdx: btns.findIndex((b) => b.getAttribute('aria-checked') === 'true'),
         focusedIdx: btns.indexOf(eval(sr).activeElement),
@@ -460,6 +460,261 @@ test.describe('modal dialog scoping', () => {
     }));
     expect(home.backInBody).toBe(true);
     expect(home.layerMode).toBeUndefined();
+  });
+});
+
+/**
+ * Frames. The extension injects with allFrames, so every same-origin iframe runs
+ * its own copy of the tool in its own coordinate space.
+ */
+test.describe('iframes', () => {
+  const injectEverywhere = async (page) => {
+    await page.goto(fixture);
+    await page.waitForTimeout(500);
+    for (const f of page.frames()) {
+      await f.evaluate(walkerSrc);
+      await f.evaluate(overlaySrc);
+    }
+    await page.waitForTimeout(500);
+  };
+
+  test('only the top frame draws the chip', async ({ page }) => {
+    await injectEverywhere(page);
+
+    const perFrame = await Promise.all(
+      page.frames().map((f) =>
+        f.evaluate(() => ({
+          top: window.top === window.self,
+          chip: !!document.getElementById('sho-chip-host'),
+          panel: !!document.getElementById('sho-panel-host'),
+          layer: !!document.getElementById('sho-layer-host'),
+        }))
+      )
+    );
+
+    expect(perFrame.length).toBeGreaterThan(1);
+    // One bar for the page, not one per frame. A visible iframe used to put a
+    // second bar at its own bottom-left, which reads as the tool rendering twice.
+    expect(perFrame.filter((f) => f.chip)).toHaveLength(1);
+    expect(perFrame.filter((f) => f.panel)).toHaveLength(1);
+    expect(perFrame.find((f) => f.chip).top).toBe(true);
+    // Sub-frames still outline their own headings.
+    expect(perFrame.every((f) => f.layer)).toBe(true);
+  });
+
+  test('closing from the top frame clears the frames too', async ({ page, browserName }) => {
+    // Needs a page that can script its own same-origin iframe; Firefox gives
+    // file:// documents unique origins with no launch flag to opt out.
+    test.skip(browserName !== 'chromium', 'needs same-origin file:// frames');
+    await injectEverywhere(page);
+
+    const states = () =>
+      Promise.all(
+        page.frames().map((f) => f.evaluate(() => !!(window.__shadowHeadingOutliner || {}).on))
+      );
+    expect(await states()).toEqual([true, true]);
+
+    await page.evaluate(() => {
+      const sr = document.getElementById('sho-chip-host').shadowRoot;
+      [...sr.querySelectorAll('button')].find((b) => b.textContent === 'Close').click();
+    });
+    await page.waitForTimeout(400);
+
+    // Sub-frames no longer have a chip of their own, so a close that stopped at
+    // the top frame would strand their boxes on screen with nothing to dismiss.
+    expect(await states()).toEqual([false, false]);
+  });
+});
+
+/**
+ * Docking. The panel overlays the page from whichever edge it's on — it never
+ * reflows the layout being audited, which is the same reason the right dock has
+ * always overlaid rather than pushed.
+ */
+test.describe('panel docking', () => {
+  const boot = async (page) => {
+    await page.setViewportSize({ width: 1000, height: 700 });
+    await page.goto(scrollFixture);
+    await page.evaluate(walkerSrc);
+    await page.evaluate(overlaySrc);
+    await page.waitForTimeout(350);
+  };
+  const sr = () => document.getElementById('sho-panel-host').shadowRoot;
+  const pick = (page, dock) =>
+    page.evaluate((d) => {
+      document
+        .getElementById('sho-panel-host')
+        .shadowRoot.querySelector(`.dockseg button[data-dock="${d}"]`)
+        .click();
+    }, dock);
+
+  test('each dock fills the edge it names, and never covers the chip', async ({ page }) => {
+    await boot(page);
+
+    const geometry = async () =>
+      page.evaluate(() => {
+        const host = document.getElementById('sho-panel-host');
+        const p = host.getBoundingClientRect();
+        const c = document.getElementById('sho-chip-host').getBoundingClientRect();
+        return {
+          dock: host.dataset.dock,
+          box: [p.left, p.top, p.width, p.height].map(Math.round),
+          overlapsChip: !(p.right <= c.left || p.left >= c.right || p.bottom <= c.top || p.top >= c.bottom),
+          checked: [...host.shadowRoot.querySelectorAll('.dockseg button')].filter(
+            (b) => b.getAttribute('aria-checked') === 'true'
+          ).length,
+        };
+      });
+
+    for (const [dock, expected] of [
+      ['right', [660, 0, 340, 700]],
+      ['left', [0, 0, 340, 700]],
+      ['top', [0, 0, 1000, 300]],
+      ['bottom', [0, 400, 1000, 300]],
+      ['float', [24, 24, 340, 300]],
+    ]) {
+      await pick(page, dock);
+      await page.waitForTimeout(200);
+      const g = await geometry();
+      expect(g.dock).toBe(dock);
+      expect(g.box).toEqual(expected);
+      // Exactly one radio checked, and the chip stays readable. A left or bottom
+      // dock lands exactly where the chip lives, so it has to move aside.
+      expect(g.checked).toBe(1);
+      expect(g.overlapsChip).toBe(false);
+    }
+  });
+
+  test('the dock picker is a keyboard-operable radio group', async ({ page }) => {
+    await boot(page);
+    const state = () =>
+      page.evaluate(() => {
+        const s = document.getElementById('sho-panel-host').shadowRoot;
+        const btns = [...s.querySelectorAll('.dockseg button')];
+        return {
+          role: s.querySelector('.dockseg').getAttribute('role'),
+          roles: btns.map((b) => b.getAttribute('role')),
+          // Icon-only buttons still need a name for assistive tech.
+          named: btns.every((b) => (b.getAttribute('aria-label') || '').length > 3),
+          tabindex: btns.map((b) => b.tabIndex),
+          checkedIdx: btns.findIndex((b) => b.getAttribute('aria-checked') === 'true'),
+          focusedIdx: btns.indexOf(s.activeElement),
+        };
+      });
+
+    const before = await state();
+    expect(before.role).toBe('radiogroup');
+    expect(before.roles).toEqual(['radio', 'radio', 'radio', 'radio', 'radio']);
+    expect(before.named).toBe(true);
+    // Roving tabindex: one tab stop for the whole group.
+    expect(before.tabindex.filter((t) => t === 0)).toHaveLength(1);
+    expect(before.checkedIdx).toBe(1); // 'right' is the default
+
+    await page.evaluate(
+      () =>
+        document
+          .getElementById('sho-panel-host')
+          .shadowRoot.querySelector('.dockseg button[aria-checked="true"]')
+          .focus()
+    );
+    await page.keyboard.press('ArrowRight');
+    const after = await state();
+    expect(after.checkedIdx).toBe(2);
+    expect(after.focusedIdx).toBe(2);
+
+    // Alt+Shift+D cycles through the same set.
+    await page.evaluate(() =>
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'd', altKey: true, shiftKey: true }))
+    );
+    expect(await page.evaluate(() => document.getElementById('sho-panel-host').dataset.dock)).toBe('bottom');
+  });
+
+  test('the resize handle is a separator that arrow keys drive', async ({ page }) => {
+    await boot(page);
+
+    const grip = await page.evaluate(() => {
+      const g = document.getElementById('sho-panel-host').shadowRoot.querySelector('.grip');
+      return { role: g.getAttribute('role'), orientation: g.getAttribute('aria-orientation'), tabIndex: g.tabIndex };
+    });
+    expect(grip.role).toBe('separator');
+    expect(grip.orientation).toBe('vertical');
+    expect(grip.tabIndex).toBe(0);
+
+    const width = () =>
+      page.evaluate(() => Math.round(document.getElementById('sho-panel-host').getBoundingClientRect().width));
+    const start = await width();
+
+    await page.evaluate(() => document.getElementById('sho-panel-host').shadowRoot.querySelector('.grip').focus());
+    await page.keyboard.press('ArrowRight');
+    await page.waitForTimeout(80);
+    // On a right dock the handle is on the panel's left edge, so rightwards
+    // shrinks it — the direction the drag would go.
+    expect(await width()).toBeLessThan(start);
+
+    await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press('ArrowLeft');
+    await page.waitForTimeout(80);
+    expect(await width()).toBeGreaterThan(start);
+
+    // A top dock resizes vertically instead, and says so.
+    await pick(page, 'top');
+    await page.waitForTimeout(150);
+    const h0 = await page.evaluate(() =>
+      Math.round(document.getElementById('sho-panel-host').getBoundingClientRect().height)
+    );
+    expect(
+      await page.evaluate(() =>
+        document.getElementById('sho-panel-host').shadowRoot.querySelector('.grip').getAttribute('aria-orientation')
+      )
+    ).toBe('horizontal');
+    await page.evaluate(() => document.getElementById('sho-panel-host').shadowRoot.querySelector('.grip').focus());
+    await page.keyboard.press('ArrowDown');
+    await page.waitForTimeout(80);
+    expect(
+      await page.evaluate(() =>
+        Math.round(document.getElementById('sho-panel-host').getBoundingClientRect().height)
+      )
+    ).toBeGreaterThan(h0);
+  });
+
+  test('a floating panel drags by its header and is kept on screen', async ({ page }) => {
+    await boot(page);
+    await pick(page, 'float');
+    await page.waitForTimeout(200);
+
+    const at = () =>
+      page.evaluate(() => {
+        const r = document.getElementById('sho-panel-host').getBoundingClientRect();
+        return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };
+      });
+
+    const from = await at();
+    const head = await page.evaluate(() => {
+      const r = document
+        .getElementById('sho-panel-host')
+        .shadowRoot.querySelector('header')
+        .getBoundingClientRect();
+      // Left of the buttons, so the drag isn't swallowed by a control.
+      return { x: r.left + 20, y: r.top + r.height / 2 };
+    });
+    await page.mouse.move(head.x, head.y);
+    await page.mouse.down();
+    await page.mouse.move(head.x + 260, head.y + 180, { steps: 8 });
+    await page.mouse.up();
+    await page.waitForTimeout(120);
+
+    const moved = await at();
+    expect(moved.x).toBeGreaterThan(from.x + 200);
+    expect(moved.y).toBeGreaterThan(from.y + 120);
+
+    // Narrowing the window must not strand it off-canvas with no way back.
+    await page.setViewportSize({ width: 420, height: 420 });
+    await page.waitForTimeout(250);
+    const clamped = await at();
+    expect(clamped.x).toBeGreaterThanOrEqual(0);
+    expect(clamped.y).toBeGreaterThanOrEqual(0);
+    expect(clamped.x + clamped.w).toBeLessThanOrEqual(420);
+    expect(clamped.y + clamped.h).toBeLessThanOrEqual(420);
   });
 });
 

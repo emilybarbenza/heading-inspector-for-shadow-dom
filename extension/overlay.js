@@ -102,6 +102,9 @@
 
   let on = false;
   let labelMode = 'level';
+  let dock = 'right';
+  let floatX = 24;
+  let floatY = 24;
   let layerHost = null;
   let layer = null;
   let chipHost = null;
@@ -148,14 +151,21 @@
   function loadMode() {
     try {
       if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-        chrome.storage.local.get({ labelMode: 'level' }, (v) => {
-          if (v && LABEL_MODES.includes(v.labelMode)) {
-            labelMode = v.labelMode;
+        chrome.storage.local.get(
+          { labelMode: 'level', dock: 'right', panelW: 0, panelH: 0, floatX: 24, floatY: 24 },
+          (v) => {
+            if (!v) return;
+            if (LABEL_MODES.includes(v.labelMode)) labelMode = v.labelMode;
+            if (DOCKS.some((d) => d.dock === v.dock)) dock = v.dock;
+            if (v.panelW || v.panelH) setPanelSize(v.panelW || undefined, v.panelH || undefined);
+            floatX = Number(v.floatX) || 0;
+            floatY = Number(v.floatY) || 0;
             updateDetailControl();
+            applyDock();
             renderPanel();
             schedule();
           }
-        });
+        );
       }
     } catch (_) {
       /* bookmarklet: just keep it in memory */
@@ -166,6 +176,19 @@
     try {
       if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
         chrome.storage.local.set({ labelMode });
+      }
+    } catch (_) {
+      /* no-op */
+    }
+  }
+
+  // Where the panel sits and how big it is, kept with the label mode so the tool
+  // comes back the way it was left on the next page.
+  function saveLayout() {
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        const { w, h } = panelSize();
+        chrome.storage.local.set({ dock, panelW: w, panelH: h, floatX, floatY });
       }
     } catch (_) {
       /* no-op */
@@ -977,10 +1000,15 @@
     const shadow = chipHost.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
     style.textContent = `
+      /* Offsets go through custom properties because the !important here would
+         otherwise beat an inline style set from JS — important author
+         declarations outrank a normal inline style. placeChip() nudges these so
+         a left- or bottom-docked panel doesn't sit on top of the counts. */
       :host {
         position: fixed !important;
-        left: 8px !important;
-        bottom: 8px !important;
+        --chip-left: 8px; --chip-bottom: 8px;
+        left: var(--chip-left) !important;
+        bottom: var(--chip-bottom) !important;
         z-index: 2147483647 !important;
         forced-color-adjust: none;
       }
@@ -1053,7 +1081,7 @@
           'or audit note. (Alt+Shift+C)',
         () => copy(outlineText())
       ),
-      button('Close', 'Close the whole tool (Esc when the panel is hidden)', off)
+      button('Close', 'Close the whole tool (Esc when the panel is hidden)', closeEverywhere)
     );
 
     chip.append(chipText, chipNote, actions);
@@ -1097,6 +1125,18 @@
     { mode: 'chain', label: '+ Selector' },
   ];
 
+  // Dock positions, in the order they appear in the picker. The glyphs are
+  // decorative — each button carries a real name for assistive tech, because an
+  // icon-only control that only a sighted mouse user can identify would be a
+  // poor look on a tool for accessibility auditors.
+  const DOCKS = [
+    { dock: 'left', label: 'Dock left' },
+    { dock: 'right', label: 'Dock right' },
+    { dock: 'top', label: 'Dock top' },
+    { dock: 'bottom', label: 'Dock bottom' },
+    { dock: 'float', label: 'Float' },
+  ];
+
   // Unlike the overlay and chip, the panel is the tool's own operable UI, so
   // it's NOT aria-hidden. An auditor who uses a screen reader or the keyboard
   // has to be able to drive it. The cost is that it adds focus stops and a
@@ -1109,16 +1149,18 @@
     const shadow = panelHost.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
     style.textContent = `
+      /* Every edge is expressed here rather than in JS, so switching docks is a
+         single attribute flip and the panel can't end up half-positioned by two
+         docks at once. The !important is because a page's own CSS can otherwise
+         reach this host element. */
       :host {
         position: fixed !important;
-        top: 0 !important;
-        right: 0 !important;
-        height: 100vh !important;
         z-index: 2147483646 !important;
         forced-color-adjust: none;
         --bg: #ffffff; --fg: #14181d; --muted: #5a6672; --line: #d7dde3;
-        /* Caps at 88vw so the panel never swallows a phone-width viewport. */
-        --rowhover: #eef2f6; --panelw: min(340px, 88vw);
+        /* Caps so the panel can never swallow a phone-width viewport. */
+        --rowhover: #eef2f6; --panelw: min(340px, 88vw); --panelh: min(300px, 70vh);
+        --floatx: 24px; --floaty: 24px;
         /* Flag text colors, darkened enough to clear 4.5:1 on the white panel.
            The lighter shades used before failed contrast in the light theme. */
         --flag-v: #c1121f; --flag-a: #8a6300;
@@ -1131,23 +1173,78 @@
           --flag-v: #ff6b74; --flag-a: #e0a83a;
         }
       }
+      /* Docked edges. The panel always overlays rather than reflowing the page,
+         whichever edge it is on: reflowing would change the very layout being
+         audited. Each dock also carries its border and shadow on the side that
+         faces the page, so the panel reads as attached to that edge. */
+      :host([data-dock="right"]) {
+        inset: 0 0 auto auto !important;
+        width: var(--panelw) !important; height: 100vh !important;
+      }
+      :host([data-dock="left"]) {
+        inset: 0 auto auto 0 !important;
+        width: var(--panelw) !important; height: 100vh !important;
+      }
+      :host([data-dock="top"]) {
+        inset: 0 auto auto 0 !important;
+        width: 100vw !important; height: var(--panelh) !important;
+      }
+      :host([data-dock="bottom"]) {
+        inset: auto auto 0 0 !important;
+        width: 100vw !important; height: var(--panelh) !important;
+      }
+      :host([data-dock="float"]) {
+        inset: var(--floaty) auto auto var(--floatx) !important;
+        width: var(--panelw) !important; height: var(--panelh) !important;
+      }
+
       * { box-sizing: border-box; }
       .panel {
         display: flex; flex-direction: column;
-        width: var(--panelw); height: 100%;
+        width: 100%; height: 100%;
         background: var(--bg); color: var(--fg);
-        border-left: 1px solid var(--line);
-        box-shadow: -1px 0 6px rgba(0,0,0,0.14);
+        border: 1px solid var(--line);
         font: 400 13px/1.45 system-ui, -apple-system, Segoe UI, sans-serif;
         forced-color-adjust: none;
       }
+      :host([data-dock="right"])  .panel { border-width: 0 0 0 1px; box-shadow: -1px 0 6px rgba(0,0,0,0.14); }
+      :host([data-dock="left"])   .panel { border-width: 0 1px 0 0; box-shadow: 1px 0 6px rgba(0,0,0,0.14); }
+      :host([data-dock="top"])    .panel { border-width: 0 0 1px 0; box-shadow: 0 1px 6px rgba(0,0,0,0.14); }
+      :host([data-dock="bottom"]) .panel { border-width: 1px 0 0 0; box-shadow: 0 -1px 6px rgba(0,0,0,0.14); }
+      :host([data-dock="float"])  .panel { border-radius: 6px; box-shadow: 0 6px 24px rgba(0,0,0,0.28); }
+
+      /* The resize handle sits on whichever edge faces the page, so dragging it
+         always grows the panel in the direction you'd expect. It is a real
+         focusable separator, not a decorative strip: a keyboard user auditing a
+         cramped page needs to resize this too, and arrow keys do it. */
       .grip {
-        position: absolute; left: -3px; top: 0; width: 6px; height: 100%;
-        cursor: ew-resize; touch-action: none;
+        position: absolute; touch-action: none; z-index: 2;
       }
+      .grip:focus-visible { outline: 2px solid var(--fg); outline-offset: -2px; }
+      :host([data-dock="right"])  .grip { left: -3px; top: 0; width: 6px; height: 100%; cursor: ew-resize; }
+      :host([data-dock="left"])   .grip { right: -3px; top: 0; width: 6px; height: 100%; cursor: ew-resize; }
+      :host([data-dock="top"])    .grip { bottom: -3px; left: 0; height: 6px; width: 100%; cursor: ns-resize; }
+      :host([data-dock="bottom"]) .grip { top: -3px; left: 0; height: 6px; width: 100%; cursor: ns-resize; }
+      /* Floating resizes in both axes at once, so the handle is a corner. */
+      :host([data-dock="float"])  .grip {
+        right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize;
+      }
+      :host([data-dock="float"]) .grip::after {
+        content: ''; position: absolute; right: 3px; bottom: 3px; width: 8px; height: 8px;
+        border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+      }
+      /* Only the floating panel moves, and only by its header — a docked one has
+         nowhere to go. */
+      :host([data-dock="float"]) header { cursor: move; }
       header {
-        display: flex; align-items: center; gap: 8px;
+        display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
         padding: 8px 10px; border-bottom: 1px solid var(--line);
+      }
+      /* On a top or bottom dock the panel is viewport-wide, so the list gets the
+         height and the controls sit in a row rather than stacked. */
+      :host([data-dock="top"]) .controls,
+      :host([data-dock="bottom"]) .controls {
+        flex-direction: row; align-items: center; flex-wrap: wrap; gap: 8px 16px;
       }
       .title { font-weight: 700; font-size: 12px; white-space: nowrap; }
       .spacer { margin-left: auto; }
@@ -1167,6 +1264,28 @@
         font: inherit; font-size: 12px; color: var(--fg); background: transparent;
         border: 0; border-right: 1px solid var(--line); padding: 4px 8px; cursor: pointer;
       }
+      /* Icon-sized cells for the dock picker, so five of them fit the header. */
+      .dockseg button { padding: 3px 5px; line-height: 0; }
+      .dockseg { flex: none; }
+      /* Drawn rather than lettered: the block glyphs that read as left and right
+         at text size are all but identical at 12px, and any character set would
+         still be a font gamble. currentColor inverts with the checked state for
+         free. */
+      .dockicon {
+        display: block; position: relative; width: 14px; height: 11px;
+        border: 1px solid currentColor; border-radius: 2px; opacity: 0.85;
+      }
+      .dockicon::after { content: ''; position: absolute; background: currentColor; }
+      [data-dock="left"]   .dockicon::after { left: 0; top: 0; bottom: 0; width: 4px; }
+      [data-dock="right"]  .dockicon::after { right: 0; top: 0; bottom: 0; width: 4px; }
+      [data-dock="top"]    .dockicon::after { top: 0; left: 0; right: 0; height: 4px; }
+      [data-dock="bottom"] .dockicon::after { bottom: 0; left: 0; right: 0; height: 4px; }
+      /* Float reads as a smaller pane lifted off the corner. */
+      [data-dock="float"]  .dockicon::after {
+        right: 1px; bottom: 1px; width: 8px; height: 6px;
+        box-shadow: 0 0 0 1px var(--bg);
+      }
+      .seg button[aria-checked="true"] .dockicon { opacity: 1; }
       .seg button:last-child { border-right: 0; }
       /* Neutral inverted fill for the chosen radio. */
       .seg button[aria-checked="true"] { background: var(--fg); color: var(--bg); }
@@ -1238,8 +1357,11 @@
 
     const grip = document.createElement('div');
     grip.className = 'grip';
-    grip.title = 'Drag to resize the panel';
+    grip.setAttribute('role', 'separator');
+    grip.setAttribute('aria-label', 'Resize panel');
+    grip.tabIndex = 0;
     grip.addEventListener('pointerdown', startResize);
+    grip.addEventListener('keydown', onGripKey);
 
     // Header: title, then Hide (dismiss the panel, keep the boxes) and Close
     // (shut the whole tool). Collapse used to live here too, but it did nearly
@@ -1250,11 +1372,49 @@
     title.textContent = 'Heading outline';
     const spacer = document.createElement('span');
     spacer.className = 'spacer';
+
+    // One-of-five, so a radio group like the detail picker rather than five
+    // independent toggles.
+    const dockSeg = document.createElement('div');
+    dockSeg.className = 'seg dockseg';
+    dockSeg.setAttribute('role', 'radiogroup');
+    dockSeg.setAttribute('aria-label', 'Panel position');
+    for (const d of DOCKS) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.setAttribute('role', 'radio');
+      b.setAttribute('aria-checked', 'false');
+      b.setAttribute('aria-label', d.label);
+      b.dataset.dock = d.dock;
+      b.dataset.tip = `${d.label} (Alt+Shift+D cycles)`;
+      const g = document.createElement('span');
+      g.className = 'dockicon';
+      g.setAttribute('aria-hidden', 'true');
+      b.append(g);
+      b.addEventListener('click', () => setDock(d.dock));
+      dockSeg.append(b);
+    }
+    dockSeg.addEventListener('keydown', (e) => {
+      const btns = [...dockSeg.querySelectorAll('button')];
+      const i = btns.indexOf(panelHost.shadowRoot.activeElement);
+      if (i < 0) return;
+      let ni = i;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') ni = (i + 1) % btns.length;
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') ni = (i - 1 + btns.length) % btns.length;
+      else if (e.key === 'Home') ni = 0;
+      else if (e.key === 'End') ni = btns.length - 1;
+      else return;
+      e.preventDefault();
+      setDock(btns[ni].dataset.dock);
+      btns[ni].focus();
+    });
+
     const hideBtn = iconButton('Hide', togglePanel);
     hideBtn.dataset.tip = 'Hide the panel, keep the boxes (Alt+Shift+P)';
-    const closeBtn = iconButton('Close', off);
+    const closeBtn = iconButton('Close', closeEverywhere);
     closeBtn.dataset.tip = 'Close the whole tool (Esc when the panel is hidden)';
     head.append(title, spacer, hideBtn, closeBtn);
+    head.addEventListener('pointerdown', startMove);
 
     // Controls: labeled detail segmented control, then Copy outline.
     const controls = document.createElement('div');
@@ -1309,9 +1469,22 @@
       'every heading by level with its flags. Good for pasting into a bug report ' +
       'or audit note. (Alt+Shift+C)';
 
+    // Same labelled-segmented-control pattern as Detail. It lives here rather
+    // than in the header because the header can't hold a title, five icons and
+    // two buttons at 340px without wrapping.
+    const dockGroup = document.createElement('div');
+    dockGroup.className = 'detail';
+    const dockLabel = document.createElement('span');
+    dockLabel.className = 'detail-label';
+    dockLabel.id = 'sho-dock-label';
+    dockLabel.textContent = 'Dock';
+    dockSeg.setAttribute('aria-labelledby', dockLabel.id);
+    dockSeg.removeAttribute('aria-label');
+    dockGroup.append(dockLabel, dockSeg);
+
     const controlRow = document.createElement('div');
-    controlRow.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap';
-    controlRow.append(detail, copyBtn);
+    controlRow.style.cssText = 'display:flex;gap:8px 14px;align-items:center;flex-wrap:wrap';
+    controlRow.append(detail, dockGroup, copyBtn);
 
     // Not a live region: it re-renders on every rescan, and announcing the
     // counts on each mutation would make a screen reader chatty on dynamic pages.
@@ -1403,6 +1576,7 @@
     shadow.append(style, panel);
     mount(panelHost);
     updateDetailControl();
+    applyDock();
   }
 
   function iconButton(label, fn) {
@@ -1427,6 +1601,7 @@
   function setPanelHidden(v, opts) {
     panelHidden = v;
     if (panelHost) panelHost.style.display = v ? 'none' : '';
+    placeChip();
     if (chipPanelBtn) {
       chipPanelBtn.textContent = v ? 'Show panel' : 'Hide panel';
       chipPanelBtn.title = v
@@ -1442,32 +1617,174 @@
     }
   }
 
-  // Resizing the panel by dragging its inner edge. Width lives on the host var.
-  let resizeStartX = 0;
-  let resizeStartW = 0;
+  // ------------------------------------------------------------- panel layout
+
+  const MIN_W = 240;
+  const MIN_H = 140;
+  const maxW = () => Math.min(720, Math.floor(innerWidth * 0.92));
+  const maxH = () => Math.min(640, Math.floor(innerHeight * 0.9));
+
+  // Which axes a dock can be resized along, and which way the drag runs. On a
+  // right dock the handle is on the panel's left edge, so dragging left has to
+  // grow it — hence the sign.
+  const RESIZE = {
+    right: { x: -1, y: 0 },
+    left: { x: 1, y: 0 },
+    top: { y: 1, x: 0 },
+    bottom: { y: -1, x: 0 },
+    float: { x: 1, y: 1 },
+  };
+
+  function panelSize() {
+    const el = panelHost && panelHost.shadowRoot.querySelector('.panel');
+    const r = el ? el.getBoundingClientRect() : null;
+    return { w: r ? Math.round(r.width) : 340, h: r ? Math.round(r.height) : 300 };
+  }
+
+  function setPanelSize(w, h) {
+    if (!panelHost) return;
+    if (typeof w === 'number') {
+      panelHost.style.setProperty('--panelw', `${Math.min(maxW(), Math.max(MIN_W, w))}px`);
+    }
+    if (typeof h === 'number') {
+      panelHost.style.setProperty('--panelh', `${Math.min(maxH(), Math.max(MIN_H, h))}px`);
+    }
+  }
+
+  /**
+   * Keep a floating panel on screen. Without this a float positioned on a wide
+   * window is stranded off-canvas the moment the window narrows, with no way
+   * back short of switching docks.
+   */
+  function clampFloat() {
+    if (!panelHost || dock !== 'float') return;
+    const { w, h } = panelSize();
+    const x = Math.min(Math.max(0, floatX), Math.max(0, innerWidth - w));
+    const y = Math.min(Math.max(0, floatY), Math.max(0, innerHeight - h));
+    floatX = x;
+    floatY = y;
+    panelHost.style.setProperty('--floatx', `${x}px`);
+    panelHost.style.setProperty('--floaty', `${y}px`);
+  }
+
   function startResize(e) {
     if (!panelHost) return;
     e.preventDefault();
-    resizeStartX = e.clientX;
-    // Measure the rendered width; the CSS var may hold a min() expression.
-    const panelEl = panelHost.shadowRoot.querySelector('.panel');
-    resizeStartW = panelEl ? Math.round(panelEl.getBoundingClientRect().width) : 340;
+    e.stopPropagation();
+    const axis = RESIZE[dock] || RESIZE.right;
+    const from = { x: e.clientX, y: e.clientY, ...panelSize() };
     const move = (ev) => {
-      const cap = Math.min(720, Math.floor(innerWidth * 0.92));
-      const w = Math.min(cap, Math.max(240, resizeStartW + (resizeStartX - ev.clientX)));
-      panelHost.style.setProperty('--panelw', `${w}px`);
+      if (axis.x) setPanelSize(from.w + (ev.clientX - from.x) * axis.x, undefined);
+      if (axis.y) setPanelSize(undefined, from.h + (ev.clientY - from.y) * axis.y);
+      clampFloat();
+      schedule();
     };
     const up = () => {
       removeEventListener('pointermove', move);
       removeEventListener('pointerup', up);
+      saveLayout();
     };
     addEventListener('pointermove', move);
     addEventListener('pointerup', up);
   }
 
+  // Arrow keys on the focused separator, so resizing isn't pointer-only. This is
+  // the ARIA window-splitter pattern, and it matters here: the panel is the one
+  // surface of this tool a keyboard user is meant to drive.
+  function onGripKey(e) {
+    const axis = RESIZE[dock] || RESIZE.right;
+    const step = e.shiftKey ? 64 : 16;
+    const { w, h } = panelSize();
+    let handled = true;
+    if (e.key === 'ArrowLeft') setPanelSize(w - step * (axis.x || 1), undefined);
+    else if (e.key === 'ArrowRight') setPanelSize(w + step * (axis.x || 1), undefined);
+    else if (e.key === 'ArrowUp') setPanelSize(undefined, h - step * (axis.y || 1));
+    else if (e.key === 'ArrowDown') setPanelSize(undefined, h + step * (axis.y || 1));
+    else handled = false;
+    if (!handled) return;
+    e.preventDefault();
+    clampFloat();
+    schedule();
+    saveLayout();
+  }
+
+  // Dragging a floating panel by its header. Buttons inside the header keep
+  // their own clicks; only bare header space starts a move.
+  function startMove(e) {
+    if (!panelHost || dock !== 'float') return;
+    if (e.target && e.target.closest && e.target.closest('button, .seg')) return;
+    e.preventDefault();
+    const from = { x: e.clientX, y: e.clientY, fx: floatX, fy: floatY };
+    const move = (ev) => {
+      floatX = from.fx + (ev.clientX - from.x);
+      floatY = from.fy + (ev.clientY - from.y);
+      clampFloat();
+      schedule();
+    };
+    const up = () => {
+      removeEventListener('pointermove', move);
+      removeEventListener('pointerup', up);
+      saveLayout();
+    };
+    addEventListener('pointermove', move);
+    addEventListener('pointerup', up);
+  }
+
+  function setDock(next) {
+    if (!DOCKS.some((d) => d.dock === next)) return;
+    dock = next;
+    applyDock();
+    saveLayout();
+    schedule();
+  }
+
+  function cycleDock() {
+    const i = DOCKS.findIndex((d) => d.dock === dock);
+    setDock(DOCKS[(i + 1) % DOCKS.length].dock);
+  }
+
+  function applyDock() {
+    if (!panelHost) return;
+    panelHost.dataset.dock = dock;
+
+    const grip = panelHost.shadowRoot.querySelector('.grip');
+    if (grip) {
+      const vertical = dock === 'top' || dock === 'bottom';
+      grip.setAttribute('aria-orientation', vertical ? 'horizontal' : 'vertical');
+      grip.dataset.tip =
+        dock === 'float'
+          ? 'Drag to resize, or use the arrow keys. Drag the header to move.'
+          : 'Drag to resize, or use the arrow keys.';
+    }
+
+    for (const b of panelHost.shadowRoot.querySelectorAll('.dockseg button')) {
+      const chosen = b.dataset.dock === dock;
+      b.setAttribute('aria-checked', chosen ? 'true' : 'false');
+      b.tabIndex = chosen ? 0 : -1;
+    }
+
+    clampFloat();
+    placeChip();
+  }
+
+  /**
+   * Keep the chip clear of the panel. It lives at the bottom-left, which is
+   * exactly where a bottom or left dock lands, and two overlapping fixed
+   * elements would hide the counts behind the outline.
+   */
+  function placeChip() {
+    if (!chipHost) return;
+    const { w, h } = panelSize();
+    const visible = panelHost && panelHost.isConnected && !panelHidden && isTopFrame();
+    if (visible && dock === 'left') chipHost.style.setProperty('--chip-left', `${w + 16}px`);
+    else chipHost.style.removeProperty('--chip-left');
+    if (visible && dock === 'bottom') chipHost.style.setProperty('--chip-bottom', `${h + 16}px`);
+    else chipHost.style.removeProperty('--chip-bottom');
+  }
+
   function updateDetailControl() {
     if (!panelHost) return;
-    for (const b of panelHost.shadowRoot.querySelectorAll('.seg button')) {
+    for (const b of panelHost.shadowRoot.querySelectorAll('.seg:not(.dockseg) button')) {
       const on = b.dataset.mode === labelMode;
       b.setAttribute('aria-checked', on ? 'true' : 'false');
       // Roving tabindex: only the chosen radio is in the tab order; arrows reach
@@ -1943,9 +2260,12 @@
 
   // ----------------------------------------------------------------- controls
 
-  function setMode(mode) {
+  function setMode(mode, fromParent) {
     if (!LABEL_MODES.includes(mode)) return;
     labelMode = mode;
+    // Sub-frames draw their own labels, so the setting has to reach them or the
+    // boxes in a frame keep the detail level the rest of the page just left.
+    if (!fromParent) eachSubframeTool((api) => api.setMode(mode, true));
     saveMode();
     updateDetailControl();
     renderPanel();
@@ -1969,7 +2289,7 @@
       // who tabbed into the panel doesn't lose everything. A second Esc, or Esc
       // with the panel already hidden, closes the whole tool.
       if (isTopFrame() && panelHost && !panelHidden) setPanelHidden(true);
-      else off();
+      else closeEverywhere();
       return;
     }
     if (e.altKey && e.shiftKey) {
@@ -1983,6 +2303,9 @@
       } else if (k === 'p') {
         e.preventDefault();
         togglePanel();
+      } else if (k === 'd') {
+        e.preventDefault();
+        cycleDock();
       }
     }
   }
@@ -1995,6 +2318,48 @@
     if (altHeld === v) return;
     altHeld = v;
     for (const b of boxes) b.classList.toggle('clickable', v);
+  }
+
+  /**
+   * Run something in every same-origin descendant frame that's also running the
+   * tool. Cross-origin frames throw on access and were never injected anyway.
+   * Only ever walks downwards, so there is no route back to this frame.
+   */
+  function eachSubframeTool(fn, win, depth) {
+    const w = win || window;
+    const d = depth || 0;
+    if (d > 8) return;
+    let list;
+    try {
+      list = w.frames;
+    } catch (_) {
+      return;
+    }
+    for (let i = 0; i < list.length; i++) {
+      let child;
+      try {
+        child = list[i];
+        // Throws for cross-origin, which is the cheapest same-origin test there is.
+        void child.location.href;
+      } catch (_) {
+        continue;
+      }
+      try {
+        const api = child.__shadowHeadingOutliner;
+        if (api) fn(api);
+      } catch (_) {
+        /* ignore */
+      }
+      eachSubframeTool(fn, child, d + 1);
+    }
+  }
+
+  // Now that sub-frames have no chip of their own, closing from the top frame
+  // has to take their boxes with it, or they're stranded on screen with no
+  // control left to dismiss them.
+  function closeEverywhere() {
+    eachSubframeTool((api) => api.set(false));
+    off();
   }
 
   function onLayerClick(e) {
@@ -2011,12 +2376,29 @@
     setAlt(false);
   }
 
+  function onViewportResize() {
+    if (!panelHost) return;
+    const { w, h } = panelSize();
+    // Re-apply through the clamps, so a window narrowed below the stored size
+    // shrinks the panel instead of pushing it off the edge.
+    setPanelSize(w, h);
+    clampFloat();
+    placeChip();
+  }
+
   function start() {
     on = true;
     if (!layerHost) buildLayer();
-    if (!chipHost) buildChip();
     if (!layerHost.isConnected) mount(layerHost);
-    if (!chipHost.isConnected) mount(chipHost);
+
+    // The chip is top-frame only, for the same reason as the panel: with
+    // allFrames injection every same-origin iframe would otherwise draw its own
+    // bar at its own bottom-left, and a page with a visible frame shows two.
+    // Sub-frames still outline their own headings in place.
+    if (isTopFrame()) {
+      if (!chipHost) buildChip();
+      if (!chipHost.isConnected) mount(chipHost);
+    }
 
     // The overlay boxes are drawn in every frame, so each iframe outlines its
     // own headings in its own coordinate space. The outline PANEL is top-frame
@@ -2043,6 +2425,7 @@
 
     addEventListener('scroll', schedule, true);
     addEventListener('resize', schedule, true);
+    addEventListener('resize', onViewportResize);
     addEventListener('keydown', onKeyDown, true);
     addEventListener('keyup', onKeyUp, true);
     addEventListener('blur', onWindowBlur);
@@ -2069,6 +2452,7 @@
     disconnectAll();
     removeEventListener('scroll', schedule, true);
     removeEventListener('resize', schedule, true);
+    removeEventListener('resize', onViewportResize);
     removeEventListener('keydown', onKeyDown, true);
     removeEventListener('keyup', onKeyUp, true);
     removeEventListener('blur', onWindowBlur);
@@ -2093,6 +2477,8 @@
       if (v && !on) start();
       else if (!v && on) off();
     },
+    // Used by the top frame to keep sub-frame labels in step; see setMode.
+    setMode,
     get on() {
       return on;
     },

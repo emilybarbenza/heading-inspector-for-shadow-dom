@@ -24,6 +24,42 @@ for (const rel of sources) {
   parts.push(await readFile(join(root, rel), 'utf8'));
 }
 
+/**
+ * The overlay keeps its CSS in `style.textContent = \`…\`` template literals,
+ * which a JS minifier can only treat as opaque strings: every comment, newline
+ * and level of indentation survives verbatim. That is expensive twice over here,
+ * because encodeURIComponent turns each of those spaces into a three-character
+ * %20. Minifying the blocks as CSS first — which also collapses colours and
+ * shorthands — is worth several KB of a budget that has a hard ceiling.
+ *
+ * esbuild parses the CSS, so a malformed block fails the build rather than
+ * shipping quietly. Interpolation would make a block un-minifiable in isolation,
+ * so it's rejected outright instead of being silently skipped.
+ */
+async function minifyStyleBlocks(src, label) {
+  const marker = 'style.textContent = `';
+  let out = '';
+  let i = 0;
+  for (;;) {
+    const start = src.indexOf(marker, i);
+    if (start === -1) return out + src.slice(i);
+    const from = start + marker.length;
+    const end = src.indexOf('`', from);
+    if (end === -1) throw new Error(`${label}: unterminated style template literal`);
+    const css = src.slice(from, end);
+    if (css.includes('${')) {
+      throw new Error(`${label}: a style block uses interpolation; minify it by hand or inline the value`);
+    }
+    const { code: min } = await transform(css, { loader: 'css', minify: true });
+    out += src.slice(i, from) + min.trim();
+    i = end;
+  }
+}
+
+for (let i = 0; i < parts.length; i++) {
+  parts[i] = await minifyStyleBlocks(parts[i], sources[i]);
+}
+
 // The two files are self-contained IIFEs that publish onto window. Wrapping and
 // minifying keeps those side effects and strips the ~40% of the source that's
 // comments and whitespace. Without it the bookmarklet is well past the ~64KB
@@ -35,23 +71,7 @@ const { code } = await transform(wrapped, {
   target: 'es2020',
 });
 
-// The overlay's CSS lives in template literals, which esbuild can't see into,
-// so its comments survive minification and ship inside a URL that has a size
-// ceiling — a couple of KB of prose nobody will ever read. Every /* */ left in
-// the minified bundle is necessarily inside one of those style strings, because
-// esbuild has already removed the real JS comments. Parsing the result guards
-// the assumption: if a future string literal ever contains /* */ and this strip
-// mangles it, the build fails here instead of shipping a broken bookmarklet.
-const lean = code.replace(/\/\*[\s\S]*?\*\//g, '');
-try {
-  // eslint-disable-next-line no-new-func -- parse check only; never executed.
-  new Function(lean);
-} catch (err) {
-  console.error('ERROR: stripping CSS comments corrupted the bundle:', err.message);
-  process.exit(1);
-}
-
-const bookmarklet = `javascript:${encodeURIComponent(lean)}`;
+const bookmarklet = `javascript:${encodeURIComponent(code)}`;
 
 await mkdir(outDir, { recursive: true });
 await writeFile(join(outDir, 'bookmarklet.txt'), bookmarklet, 'utf8');
