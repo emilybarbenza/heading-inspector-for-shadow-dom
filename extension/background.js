@@ -5,13 +5,13 @@
  * on a window key and flips state when it sees itself already installed. That
  * works until the frame set changes. Each frame owns its own copy of that key,
  * so a frame created after the first click starts from the off state and stays
- * permanently inverted relative to the rest — click again and the panel vanishes
+ * permanently inverted relative to the rest. Click again and the panel vanishes
  * while boxes stay painted inside a lazily-loaded iframe, with no way to clear
  * them but a reload. Lazy iframes (chat widgets, consent frames, ad refreshes,
  * infinite scroll) make that a routine occurrence rather than an edge case.
  *
  * So the desired state is decided here and pushed to every frame explicitly.
- * Injection still toggles — the bookmarklet depends on that idiom — but the
+ * Injection still toggles (the bookmarklet depends on that idiom), but the
  * follow-up call settles every frame on the same answer regardless of when it
  * appeared or how many times it has been injected.
  *

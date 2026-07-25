@@ -29,8 +29,8 @@ for (const rel of sources) {
  * which a JS minifier can only treat as opaque strings: every comment, newline
  * and level of indentation survives verbatim. That is expensive twice over here,
  * because encodeURIComponent turns each of those spaces into a three-character
- * %20. Minifying the blocks as CSS first — which also collapses colours and
- * shorthands — is worth several KB of a budget that has a hard ceiling.
+ * %20. Minifying the blocks as CSS first, which also collapses colours and
+ * shorthands, is worth several KB of a budget that has a hard ceiling.
  *
  * esbuild parses the CSS, so a malformed block fails the build rather than
  * shipping quietly. Interpolation would make a block un-minifiable in isolation,
@@ -72,7 +72,7 @@ const { code } = await transform(wrapped, {
 });
 
 /**
- * encodeURIComponent is maximally conservative — it escapes every character
+ * encodeURIComponent is maximally conservative: it escapes every character
  * that is not unreserved, which for minified JS means `=`, `,`, `:`, `;`, `{`,
  * `}` and `|` all become three characters each. Together those are the single
  * largest cost in the artifact, about 9KB of pure escaping on a payload that
@@ -137,7 +137,7 @@ await writeFile(join(outDir, 'bookmarklet.html'), page, 'utf8');
 console.log(`dist/bookmarklet.txt   ${bookmarklet.length} chars`);
 console.log('dist/bookmarklet.html  drag-to-install page');
 // Fail, don't warn. CI runs this build, and a console.warn leaves the exit code
-// at 0 — so a source file growing past the limit would ship a truncated,
+// at 0, so a source file growing past the limit would ship a truncated,
 // syntactically broken bookmarklet to GitHub Pages through a green pipeline.
 if (bookmarklet.length > 60000) {
   console.error(

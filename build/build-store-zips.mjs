@@ -24,13 +24,13 @@ await mkdir(join(root, 'dist'), { recursive: true });
 
 // The version lives in two files and only the manifest is read below, so an
 // `npm version` bump would quietly produce store packages carrying the old
-// number — which AMO rejects on upload as an already-published version. Catch
+// number, which AMO rejects on upload as an already-published version. Catch
 // the drift here instead of at the upload form.
 const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
 const man = JSON.parse(await readFile(join(root, 'extension', 'manifest.json'), 'utf8'));
 if (pkg.version !== man.version) {
   console.error(
-    `ERROR: version mismatch — package.json ${pkg.version}, extension/manifest.json ${man.version}.`
+    `ERROR: version mismatch. package.json ${pkg.version}, extension/manifest.json ${man.version}.`
   );
   process.exit(1);
 }
@@ -46,8 +46,8 @@ async function pack(name, patch) {
   const out = join(root, 'dist', `${name}.zip`);
   await rm(out, { force: true });
   // '.*' alone only matches dotfiles at the archive root. Nested ones need the
-  // second pattern, and icons/.DS_Store — which macOS creates the moment that
-  // folder is opened in Finder — is exactly the hidden file AMO's linter flags.
+  // second pattern, and icons/.DS_Store, which macOS creates the moment that
+  // folder is opened in Finder, is exactly the hidden file AMO's linter flags.
   execFileSync('zip', ['-qr', out, '.', '-x', '.*', '*/.*'], { cwd: stage });
   await rm(stage, { recursive: true, force: true });
   console.log(`dist/${name}.zip`);

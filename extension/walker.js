@@ -94,7 +94,7 @@
    * to its shadow content. Plain textContent returns '' for both.
    *
    * The shadow-root case is the one that matters most here. A heading whose text
-   * is rendered by a child component — `<h2><x-title></x-title></h2>` — has no
+   * is rendered by a child component, `<h2><x-title></x-title></h2>`, has no
    * text of its own, and reading only its light children reports it as empty.
    * That turns a perfectly good heading into a fabricated empty-heading
    * violation, on exactly the component-built pages this tool exists for.
@@ -126,7 +126,7 @@
       }
     }
 
-    // A host renders its shadow content, not its light children — those only
+    // A host renders its shadow content, not its light children: those only
     // appear where a <slot> pulls them in, which the branch above handles.
     const sub = shadowRootOf(el);
     if (sub) {
@@ -152,7 +152,7 @@
    * is what the skipped-level check runs on, so a component that slots its
    * heading in used to produce a level jump that does not exist on screen.
    *
-   * Light children with no slot to land in are not visited at all — they render
+   * Light children with no slot to land in are not visited at all. They render
    * nowhere and are absent from the accessibility tree.
    *
    * @param {object} [options]

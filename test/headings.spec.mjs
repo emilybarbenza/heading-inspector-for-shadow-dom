@@ -82,7 +82,7 @@ test.describe('page world (bookmarklet equivalent)', () => {
     }));
 
     // textContent is '' for all three, so reading only the light children would
-    // report each as an empty-heading VIOLATION against WCAG 1.3.1 and 2.4.6 —
+    // report each as an empty-heading VIOLATION against WCAG 1.3.1 and 2.4.6,
     // on exactly the component-built markup this tool exists for.
     expect(r.outline).toContain('Text from a child component');
     expect(r.outline).toContain('Named by an icon');
@@ -116,7 +116,7 @@ test.describe('page world (bookmarklet equivalent)', () => {
       };
     });
 
-    // Zero rects of its own, exactly like display:none — but Chrome reports it
+    // Zero rects of its own, exactly like display:none, but Chrome reports it
     // as a heading, not ignored, so leaving it out under-reports the page.
     expect(r.ownRects).toBe(0);
     expect(r.outline).toContain('Contents heading wrapping a block link');
@@ -151,7 +151,7 @@ test.describe('page world (bookmarklet equivalent)', () => {
     expect(at('Slotted first, written second')).toBeLessThan(at('Slotted second, written first'));
 
     // Generated content and a labelled reference are both real accessible names,
-    // and neither has any DOM text — reading text alone flags them empty.
+    // and neither has any DOM text, so reading text alone flags them empty.
     expect(r.outline).toContain('Named by generated content');
     expect(r.outline).toContain('Named by a labelled span');
 
@@ -409,7 +409,7 @@ test.describe('outline is independent of scroll position', () => {
  */
 test.describe('modal dialog scoping', () => {
   // While a native dialog is open the tool relocates into it, so the hosts are
-  // no longer reachable by id — the dialog is usually inside a shadow root.
+  // no longer reachable by id, because the dialog is usually inside a shadow root.
   const snapshot = (page) =>
     page.evaluate(() => {
       const panel = window.__shadowHeadingOutliner.hosts.panel;
@@ -556,7 +556,7 @@ test.describe('live updates', () => {
     expect(await rows()).toEqual(['One', 'Original text']);
 
     // Replacing the child nodes fires the observer, but the element, level and
-    // findings are all unchanged — so a change check that ignores text would
+    // findings are all unchanged, so a change check that ignores text would
     // skip the re-render and leave the panel showing text the page no longer has.
     await page.evaluate(() => {
       document.getElementById('t').textContent = 'Rewritten';
@@ -564,7 +564,7 @@ test.describe('live updates', () => {
     await page.waitForTimeout(700);
     expect(await rows()).toEqual(['One', 'Rewritten']);
 
-    // Editing the text node in place fires nothing at all — characterData isn't
+    // Editing the text node in place fires nothing at all. characterData isn't
     // observed, deliberately, since a page with a ticking counter would rescan
     // forever. The periodic safety scan is what has to notice this one.
     await page.evaluate(() => {
@@ -617,7 +617,7 @@ test.describe('live updates', () => {
     });
 
     // `#a.b` reads as "id a, class b" unescaped, and Tailwind's md:flex and w-1/2
-    // throw SyntaxError — both silently useless in the artifact this tool exists
+    // throw SyntaxError. Both are silently useless in the artifact this tool exists
     // to hand a developer.
     expect(results).toHaveLength(5);
     for (const r of results) expect(r.ok, `selector for "${r.heading}"`).toBe(true);
@@ -639,7 +639,7 @@ test.describe('layout robustness', () => {
   test('an ancestor zoom does not scale or drift the boxes', async ({ page }) => {
     // The lengths the tool writes are CSS pixels inside its own layer, while its
     // measurements come back in screen pixels. A zoom on an ancestor multiplies
-    // the two together, and the error grows with distance down the page — the
+    // the two together, and the error grows with distance down the page: the
     // third heading's box framed blank space 125px below it.
     await boot(
       page,
@@ -795,7 +795,7 @@ test.describe('iframes', () => {
 });
 
 /**
- * Docking. The panel overlays the page from whichever edge it's on — it never
+ * Docking. The panel overlays the page from whichever edge it's on. It never
  * reflows the layout being audited, which is the same reason the right dock has
  * always overlaid rather than pushed.
  */
@@ -916,7 +916,7 @@ test.describe('panel docking', () => {
     await page.keyboard.press('ArrowRight');
     await page.waitForTimeout(80);
     // On a right dock the handle is on the panel's left edge, so rightwards
-    // shrinks it — the direction the drag would go.
+    // shrinks it, the direction the drag would go.
     expect(await width()).toBeLessThan(start);
 
     await page.keyboard.press('ArrowLeft');
@@ -988,7 +988,7 @@ test.describe('panel docking', () => {
 
 /**
  * The shipped bookmarklet, not the sources it is built from. Nothing else runs
- * the minified, percent-encoded artifact — CI builds it and throws it away — so
+ * the minified, percent-encoded artifact (CI builds it and throws it away), so
  * a minification or escaping regression would reach GitHub Pages unnoticed.
  */
 test.describe('built bookmarklet', () => {

@@ -219,9 +219,9 @@
   //  - doc-* and graphics-* are present because they are real roles that DO
   //    displace the native one: Chrome computes `<h2 role="doc-subtitle">` as a
   //    doc-subtitle, not a heading, and leaving them out invented headings.
-  // Concrete WAI-ARIA roles. ARIA's *abstract* roles — structure, widget,
+  // Concrete WAI-ARIA roles. ARIA's *abstract* roles (structure, widget,
   // section, command, input, range, roletype, sectionhead, landmark, composite,
-  // select, window — are deliberately absent: authors may not use them and
+  // select, window) are deliberately absent: authors may not use them and
   // browsers ignore them outright, so `<h2 role="structure">` is still a
   // heading. Treating them as real roles made such headings vanish entirely.
   const ARIA_ROLES = new Set(
@@ -239,8 +239,8 @@
   );
 
   // The DPUB and graphics modules, by shape rather than by name. They matter
-  // because they displace the native role — Chrome computes
-  // `<h2 role="doc-subtitle">` as a doc-subtitle, not a heading — and listing
+  // because they displace the native role. Chrome computes
+  // `<h2 role="doc-subtitle">` as a doc-subtitle, not a heading, and listing
   // all fifty would cost more of the bookmarklet's size budget than the
   // precision is worth. A made-up `doc-` token being taken for a real role is a
   // far better failure than a real one being missed.
@@ -272,8 +272,8 @@
     //   "2.5" "3abc"  C-style prefix parse, so 2 and 3
     //   "0" "-1" "abc"  anything below 1 clamps to 1
     //   "10" and up   rejected as invalid, so the native level stands again
-    // A stricter reading invented levels no browser produces — aria-level="99"
-    // became an H99 and manufactured a skipped-level advisory out of nothing —
+    // A stricter reading invented levels no browser produces: aria-level="99"
+    // became an H99 and manufactured a skipped-level advisory out of nothing,
     // and ignored values browsers do honour.
     const raw = el.getAttribute('aria-level');
     let parsed = NaN;
@@ -305,7 +305,7 @@
    * A `showModal()` dialog lives in the top layer, which paints above every
    * z-index and makes everything outside it inert. Left alone that means the
    * outline boxes are drawn *underneath* the dialog and the panel and chip can't
-   * be clicked or focused — the tool goes blind and dead at exactly the moment
+   * be clicked or focused. The tool goes blind and dead at exactly the moment
    * it scopes itself to the dialog.
    *
    * Only a shadow-including descendant of the topmost modal escapes that. The
@@ -317,7 +317,7 @@
    * The boxes need no repositioning for this. draw() measures the layer host
    * every frame and works relative to it, so the same arithmetic yields document
    * coordinates in the normal case and viewport coordinates once the host is
-   * fixed inside the dialog — and draw() already re-runs on scroll, including
+   * fixed inside the dialog, and draw() already re-runs on scroll, including
    * scrolling inside the dialog, because the listener is a capturing one.
    */
   function syncModalHome() {
@@ -388,7 +388,7 @@
    * The box to measure a heading by.
    *
    * Normally that's the element's own, but `display: contents` generates no box
-   * at all while staying in the accessibility tree — Chrome reports such a
+   * at all while staying in the accessibility tree. Chrome reports such a
    * heading as a heading, not ignored. Judging by client rects alone therefore
    * files a heading the browser announces as "not rendered", and the outline
    * silently loses it. It is a common shape: a card whose heading wraps a block
@@ -396,7 +396,7 @@
    *
    * What it renders is its contents, so measure those. A Range covers text
    * nodes too, which querySelectorAll would miss. An empty result means an
-   * ancestor is display:none — computed display is still 'contents' there, but
+   * ancestor is display:none, where computed display is still 'contents' but
    * nothing reaches the screen.
    */
   function renderedRect(el) {
@@ -455,14 +455,14 @@
     // <details>, a hidden="until-found" section and content-visibility:hidden all
     // reserve layout while the browser drops their contents from the tree, so a
     // heading in a closed disclosure was being listed as though a screen reader
-    // could reach it — and a real skipped level either side of it went unreported
+    // could reach it, and a real skipped level either side of it went unreported
     // because the phantom heading filled the gap.
     //
     // checkVisibility() answers this and geometry cannot, but it is not a
     // wholesale replacement: it reports false for display:contents, which IS in
     // the tree and which renderedRect has already resolved above, and true for
     // visibility:hidden, which is not and which was caught before this. The
-    // default options are deliberate — content-visibility:auto reports true, so
+    // default options are deliberate: content-visibility:auto reports true, so
     // headings don't pop in and out of the outline as the page scrolls.
     if (style.display !== 'contents' && typeof el.checkVisibility === 'function') {
       try {
@@ -484,7 +484,7 @@
     // Only meaningful in a left-to-right horizontal flow. RTL documents lay
     // ordinary content out at negative x, and Chrome reports negative scrollLeft
     // for RTL and vertical-rl scroll containers, so applying this there badged
-    // plainly visible headings as screen-reader only — the same false positive
+    // plainly visible headings as screen-reader only, the same false positive
     // as the kanban case, relocated to the writing direction where horizontal
     // panes are most common. The size test above is writing-mode agnostic and
     // still catches the modern clipped recipe.
@@ -551,7 +551,7 @@
    * The quoted parts of a CSS `content` value. Generated content contributes to
    * the accessible name but has no DOM text at all, so a heading whose label is
    * an icon-font glyph or a CSS counter looks empty to anything reading the DOM
-   * — and gets reported as an empty-heading violation it does not have.
+   * and gets reported as an empty-heading violation it does not have.
    */
   function generatedText(el, pseudo) {
     let value = '';
@@ -568,8 +568,8 @@
 
   /**
    * Text as the accessible name computation sees it, which is not the same as
-   * the text on screen. Subtrees the browser drops from the name — aria-hidden
-   * and display:none — are pruned, and generated content is added.
+   * the text on screen. Subtrees the browser drops from the name (aria-hidden
+   * and display:none) are pruned, and generated content is added.
    *
    * Kept apart from composedText deliberately: that one answers "what does this
    * heading say on screen", which the panel shows, while this answers "what does
@@ -665,7 +665,7 @@
    */
   function accName(el, text) {
     // Spec order: aria-labelledby outranks aria-label, and every reference in
-    // the list contributes, joined by spaces — not just the first one that
+    // the list contributes, joined by spaces, not just the first one that
     // resolves. IDREFs don't cross shadow boundaries, so each is resolved
     // against the heading's own root.
     const ref = el.getAttribute('aria-labelledby');
@@ -1239,7 +1239,7 @@
     const style = document.createElement('style');
     style.textContent = `
       /* Offsets go through custom properties because the !important here would
-         otherwise beat an inline style set from JS — important author
+         otherwise beat an inline style set from JS: important author
          declarations outrank a normal inline style. placeChip() nudges these so
          a left- or bottom-docked panel doesn't sit on top of the counts. */
       :host {
@@ -1369,7 +1369,7 @@
   ];
 
   // Dock positions, in the order they appear in the picker. The glyphs are
-  // decorative — each button carries a real name for assistive tech, because an
+  // decorative, and each button carries a real name for assistive tech, because an
   // icon-only control that only a sighted mouse user can identify would be a
   // poor look on a tool for accessibility auditors.
   const DOCKS = [
@@ -1482,7 +1482,7 @@
         content: ''; position: absolute; right: 3px; bottom: 3px; width: 8px; height: 8px;
         border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
       }
-      /* Only the floating panel moves, and only by its header — a docked one has
+      /* Only the floating panel moves, and only by its header. A docked one has
          nowhere to go. */
       :host([data-dock="float"]) header { cursor: move; }
       header {
@@ -1875,7 +1875,7 @@
 
   // Which axes a dock can be resized along, and which way the drag runs. On a
   // right dock the handle is on the panel's left edge, so dragging left has to
-  // grow it — hence the sign.
+  // grow it, hence the sign.
   const RESIZE = {
     right: { x: -1, y: 0 },
     left: { x: 1, y: 0 },
@@ -2251,7 +2251,7 @@
 
     // The layer is anchored at the document origin, but a positioned ancestor or
     // a body margin can offset where it actually landed, so measure it and take
-    // that out. Everything below is in document coordinates — except inside an
+    // that out. Everything below is in document coordinates, except inside an
     // open dialog, where the host is pinned to the viewport and the same
     // arithmetic yields viewport coordinates. draw() re-runs on scroll either way.
     const lr = layerHost.getBoundingClientRect();
@@ -2405,7 +2405,7 @@
   /**
    * Mutations the tool caused itself. Our three hosts are children of body, and
    * the observer watches `style` and `class`, so hiding the panel or dragging
-   * its resize grip would otherwise schedule a full rescan of the page — and,
+   * its resize grip would otherwise schedule a full rescan of the page and,
    * during a drag, starve the debounce below for as long as the drag lasts.
    */
   function selfInflicted(records) {
@@ -2463,7 +2463,7 @@
   /**
    * Coalesce bursts of mutations, but never postpone indefinitely. A plain
    * resetting debounce is starved forever by anything that mutates faster than
-   * the delay — a progress bar, a marquee, a scroll-driven style write — and the
+   * the delay (a progress bar, a marquee, a scroll-driven style write), and the
    * outline silently stops updating while the page keeps changing.
    */
   function rescanSoon() {
@@ -2488,7 +2488,7 @@
         a[i].srOnly !== b[i].srOnly ||
         a[i].empty !== b[i].empty ||
         // Text, because a heading can be rewritten in place without its element,
-        // level or findings changing at all — async content and i18n do it
+        // level or findings changing at all. Async content and i18n do it
         // constantly. Leaving it out let the panel show text the page no longer
         // has, while the copied outline read the live value and disagreed.
         a[i].text !== b[i].text ||
@@ -2503,7 +2503,7 @@
 
   /**
    * Put back anything the page discarded. Frameworks that swap <body> on
-   * navigation — Turbo, htmx, some view-transition setups — take our hosts with
+   * navigation (Turbo, htmx, some view-transition setups) take our hosts with
    * it, leaving the tool running, believing it is visible, and drawing into
    * elements that are no longer in the document.
    */
@@ -2687,7 +2687,7 @@
     // Restore the panel through setPanelHidden rather than just resetting the
     // flag. off() leaves the inline display:none behind, so a tool that was
     // closed with the panel hidden would come back believing the panel is shown
-    // while it is still invisible and the chip button still says "Show panel" —
+    // while it is still invisible and the chip button still says "Show panel",
     // and the first click would then toggle it back to hidden, doing nothing.
     setPanelHidden(false, { focus: false });
 
@@ -2759,7 +2759,7 @@
       return { ...stats };
     },
     // The hosts relocate into an open dialog (see syncModalHome), where
-    // document.getElementById can't reach them — the dialog is usually inside a
+    // document.getElementById can't reach them, because the dialog is usually inside a
     // shadow root. Anything driving the tool from outside needs them by
     // reference rather than by id.
     get hosts() {
