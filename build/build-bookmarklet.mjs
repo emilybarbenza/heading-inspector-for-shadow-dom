@@ -71,7 +71,32 @@ const { code } = await transform(wrapped, {
   target: 'es2020',
 });
 
-const bookmarklet = `javascript:${encodeURIComponent(code)}`;
+/**
+ * encodeURIComponent is maximally conservative — it escapes every character
+ * that is not unreserved, which for minified JS means `=`, `,`, `:`, `;`, `{`,
+ * `}` and `|` all become three characters each. Together those are the single
+ * largest cost in the artifact, about 9KB of pure escaping on a payload that
+ * has a length ceiling.
+ *
+ * They are all legal unescaped in a URL and carry no meaning inside a
+ * `javascript:` one. Deliberately NOT relaxed: `%` (would break decoding), `#`
+ * (starts a fragment, truncating everything after it), `&`, `"`, `<` and `>`
+ * (the URL is embedded in an HTML attribute on the install page), `+` (read as
+ * a space by some consumers), and anything non-ASCII.
+ *
+ * The suite decodes and runs the built artifact, so a relaxation that broke it
+ * would fail the tests rather than ship.
+ */
+const RELAX = { '%3D': '=', '%2C': ',', '%3A': ':', '%3B': ';', '%7B': '{', '%7D': '}', '%7C': '|' };
+const encoded = encodeURIComponent(code).replace(/%(3D|2C|3A|3B|7B|7D|7C)/g, (m) => RELAX[m]);
+const bookmarklet = `javascript:${encoded}`;
+
+// The relaxation must round-trip exactly: decoding the URL has to give back the
+// bytes the browser will execute.
+if (decodeURIComponent(encoded) !== code) {
+  console.error('ERROR: relaxed percent-encoding does not round-trip.');
+  process.exit(1);
+}
 
 await mkdir(outDir, { recursive: true });
 await writeFile(join(outDir, 'bookmarklet.txt'), bookmarklet, 'utf8');

@@ -128,6 +128,43 @@ test.describe('page world (bookmarklet equivalent)', () => {
     expect(r.outline).not.toContain('Contents inside display:none');
   });
 
+  test('the outline agrees with the browser about order, names and membership', async ({ page }) => {
+    await page.goto(fixture);
+    await page.evaluate(walkerSrc);
+    await page.evaluate(overlaySrc);
+    await page.waitForTimeout(600);
+
+    const r = await page.evaluate(() => {
+      const api = window.__shadowHeadingOutliner;
+      return {
+        rows: [...api.hosts.panel.shadowRoot.querySelectorAll('.row')].map(
+          (x) => x.querySelector('.txt').textContent
+        ),
+        outline: api.outlineText(),
+      };
+    });
+    const at = (t) => r.rows.findIndex((x) => x.includes(t));
+
+    // Slot assignment, not source order: the h2 lands in the first slot even
+    // though it is written after the h3. Getting this wrong invents a level jump.
+    expect(at('Slotted first, written second')).toBeGreaterThan(-1);
+    expect(at('Slotted first, written second')).toBeLessThan(at('Slotted second, written first'));
+
+    // Generated content and a labelled reference are both real accessible names,
+    // and neither has any DOM text — reading text alone flags them empty.
+    expect(r.outline).toContain('Named by generated content');
+    expect(r.outline).toContain('Named by a labelled span');
+
+    // A stylesheet inside a heading is not part of what it says.
+    expect(r.outline).toContain('Style text must not leak');
+    expect(r.outline).not.toContain('.leak');
+
+    // A collapsed <details> lays out but leaves the accessibility tree, so its
+    // heading is not something a screen reader can reach.
+    expect(r.outline).not.toContain('Inside a collapsed details');
+    expect(r.rows).not.toContain('Collapsed section');
+  });
+
   test('boxes scroll with the page and the panel can be hidden on its own', async ({ page }) => {
     await page.setViewportSize({ width: 900, height: 380 }); // small, so it scrolls
     await page.goto(fixture);
@@ -584,6 +621,113 @@ test.describe('live updates', () => {
     // to hand a developer.
     expect(results).toHaveLength(5);
     for (const r of results) expect(r.ok, `selector for "${r.heading}"`).toBe(true);
+  });
+});
+
+/**
+ * Writing modes, page zoom, and the geometry that depends on them.
+ */
+test.describe('layout robustness', () => {
+  const boot = async (page, html) => {
+    await page.setViewportSize({ width: 1000, height: 700 });
+    await page.setContent(html);
+    await page.evaluate(walkerSrc);
+    await page.evaluate(overlaySrc);
+    await page.waitForTimeout(450);
+  };
+
+  test('an ancestor zoom does not scale or drift the boxes', async ({ page }) => {
+    // The lengths the tool writes are CSS pixels inside its own layer, while its
+    // measurements come back in screen pixels. A zoom on an ancestor multiplies
+    // the two together, and the error grows with distance down the page — the
+    // third heading's box framed blank space 125px below it.
+    await boot(
+      page,
+      `<style>body{margin:0;zoom:1.5} h1,h2,h3{margin:0;font-size:16px}</style>
+       <h1>First</h1><div style="height:60px"></div>
+       <h2>Second</h2><div style="height:60px"></div>
+       <h3>Third</h3>`
+    );
+
+    const offsets = await page.evaluate(() =>
+      [...window.__shadowHeadingOutliner.hosts.layer.shadowRoot.querySelectorAll('.box')]
+        .filter((b) => b.style.display !== 'none')
+        .map((b) => {
+          const h = b.__shoItem.el.getBoundingClientRect();
+          const r = b.getBoundingClientRect();
+          return [Math.round(r.left - h.left), Math.round(r.top - h.top), Math.round(r.width - h.width)];
+        })
+    );
+    expect(offsets).toHaveLength(3);
+    // Every box frames its own heading by exactly the padding, no matter how far
+    // down the page it is.
+    for (const o of offsets) expect(o).toEqual([-5, -5, 10]);
+  });
+
+  test('a full-width heading keeps all four borders', async ({ page }) => {
+    await boot(page, '<style>body{margin:0}h1{margin:0;font-size:20px}</style><h1>Full width</h1>');
+    const r = await page.evaluate(() => {
+      const api = window.__shadowHeadingOutliner;
+      const box = [...api.hosts.layer.shadowRoot.querySelectorAll('.box')].find(
+        (b) => b.style.display !== 'none'
+      );
+      const rect = box.getBoundingClientRect();
+      return { left: Math.round(rect.left), top: Math.round(rect.top), width: Math.round(rect.width) };
+    });
+    // The layer clips so the boxes can't extend the page's scroll area; without
+    // a clip margin that also ate the padding, leaving the commonest heading
+    // shape on the web rendered as a single underline.
+    expect(r.left).toBe(-5);
+    expect(r.top).toBe(-5);
+    expect(r.width).toBe(1010);
+  });
+
+  test('a right-to-left page is not mistaken for hidden content', async ({ page }) => {
+    await boot(
+      page,
+      `<style>html{direction:rtl}body{margin:0}h1,h2{margin:0;font-size:20px}
+        h2{display:inline-block;width:600px}</style>
+       <h1>Page title</h1>
+       <div style="width:1800px;white-space:nowrap"><h2>Second</h2><h2>Third</h2><h2>Fourth</h2></div>`
+    );
+    const rtl = await page.evaluate(() => {
+      const api = window.__shadowHeadingOutliner;
+      const sr = api.hosts.panel.shadowRoot;
+      return {
+        srOnly: api.stats.srOnly,
+        rows: sr.querySelectorAll('.row').length,
+        badged: [...sr.querySelectorAll('.row')].filter((r) => r.querySelector('.srmark')).length,
+        // The tool's own UI must not inherit the page's direction.
+        panelDirection: getComputedStyle(api.hosts.panel).direction,
+      };
+    });
+    // RTL lays ordinary content out at negative x, which the off-canvas test
+    // used to read as "parked off-screen for screen readers only".
+    expect(rtl.rows).toBe(4);
+    expect(rtl.srOnly).toBe(0);
+    expect(rtl.badged).toBe(0);
+    expect(rtl.panelDirection).toBe('ltr');
+  });
+
+  test('a vertical writing mode is not inherited by the panel', async ({ page }) => {
+    await boot(
+      page,
+      `<style>html{writing-mode:vertical-rl}body{margin:0}h1,h2{margin:0;font-size:20px}</style>
+       <h1>Alpha</h1><div style="block-size:1500px"></div><h2>Beta</h2>`
+    );
+    const vertical = await page.evaluate(() => {
+      const api = window.__shadowHeadingOutliner;
+      const panel = api.hosts.panel.shadowRoot.querySelector('.panel');
+      const box = panel.getBoundingClientRect();
+      return {
+        srOnly: api.stats.srOnly,
+        writingMode: getComputedStyle(api.hosts.panel).writingMode,
+        upright: box.height > box.width,
+      };
+    });
+    expect(vertical.srOnly).toBe(0);
+    expect(vertical.writingMode).toBe('horizontal-tb');
+    expect(vertical.upright).toBe(true);
   });
 });
 

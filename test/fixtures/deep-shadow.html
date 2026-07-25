@@ -51,6 +51,18 @@
      is the host, so only a flattened-tree climb sees the aria-hidden wrapper. -->
 <slot-hidden><h2 slot="c">Slotted into an aria-hidden shadow subtree</h2></slot-hidden>
 
+<!-- Slot assignment decides reading order: the h2 is written after the h3 but
+     lands in the slot before it, so a light-DOM-ordered walk reports a level
+     jump that isn't on screen. -->
+<slot-order><h3 slot="b">Slotted second, written first</h3><h2 slot="a">Slotted first, written second</h2></slot-order>
+
+<!-- Names the accessible name computation must get right. -->
+<style>#gen-before::before { content: "Named by generated content"; }</style>
+<h2 id="gen-before"></h2>
+<h2 aria-labelledby="label-src"></h2><span id="label-src" aria-label="Named by a labelled span"></span>
+<h2><style>.leak { color: red }</style>Style text must not leak</h2>
+<details><summary>Collapsed section</summary><h2>Inside a collapsed details</h2></details>
+
 <!-- Headings whose text or name is rendered by a child component. Reading only
      the light children reports these as empty, which is a fabricated violation. -->
 <h2><title-part></title-part></h2>
@@ -105,6 +117,18 @@
           <slot name="content"></slot>
           <inner-open></inner-open>
         `;
+      }
+    }
+  );
+
+  customElements.define(
+    'slot-order',
+    class extends HTMLElement {
+      connectedCallback() {
+        if (this.__done) return;
+        this.__done = true;
+        this.attachShadow({ mode: 'open' }).innerHTML =
+          '<slot name="a"></slot><slot name="b"></slot>';
       }
     }
   );

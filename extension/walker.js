@@ -15,7 +15,10 @@
  */
 (() => {
   const KEY = '__shadowWalker';
-  if (window[KEY]) return;
+  // Only stand down for a previous copy of *this* walker. A page that happens to
+  // use the same global for something else would otherwise block installation
+  // and leave the annotator holding an object with no walk() on it.
+  if (window[KEY] && typeof window[KEY].walk === 'function') return;
 
   const hasChromeDom =
     typeof chrome !== 'undefined' &&
@@ -30,6 +33,8 @@
   }
 
   const canPierceClosed = hasChromeDom || hasGeckoProp;
+
+  const NON_RENDERING = new Set(['script', 'style', 'template', 'noscript']);
 
   /**
    * @param {Element} el
@@ -108,6 +113,12 @@
     if (node.nodeType !== 1) return '';
 
     const el = /** @type {Element} */ (node);
+    // Text that exists in the DOM but is never rendered as text. Without this a
+    // heading wrapping a <style> block reports the stylesheet as its own
+    // content, which lands verbatim in the panel and in copied audit output.
+    // <title> is deliberately absent: inside <svg> it names the graphic.
+    if (NON_RENDERING.has(el.localName)) return '';
+
     if (el.localName === 'slot' && typeof el.assignedNodes === 'function') {
       const assigned = el.assignedNodes({ flatten: true });
       if (assigned.length) {
@@ -136,9 +147,13 @@
    * depend on document order, so this is ordered instead of using the cheaper
    * LIFO stack.
    *
-   * Slotted light children show up at their light-DOM position, not their
-   * flattened slot position. That's a known limitation. Full flattened-tree
-   * ordering would need slot assignment resolved per root.
+   * Slot assignment is resolved, so slotted content is visited where it renders
+   * rather than where it is written. That matters beyond tidiness: reading order
+   * is what the skipped-level check runs on, so a component that slots its
+   * heading in used to produce a level jump that does not exist on screen.
+   *
+   * Light children with no slot to land in are not visited at all — they render
+   * nowhere and are absent from the accessibility tree.
    *
    * @param {object} [options]
    * @param {Document|ShadowRoot} [options.root]      where to start
@@ -163,14 +178,19 @@
     const seen = new Set();
     let truncated = false;
 
-    function visitRoot(node, hosts, closed) {
+    // `hosts` is the shadow-host chain used to reach the node, which is what the
+    // selector chains are built from. `lightHosts` is the chain that applies to
+    // anything slotted into the root currently being walked: slotted nodes live
+    // in the light DOM, so their selector chain must not include the shadow root
+    // that happens to display them.
+    function visitRoot(node, hosts, closed, lightHosts) {
       if (!node || seen.has(node)) return;
       seen.add(node);
       roots.push({ root: node, hosts, closed });
-      for (const el of node.children || []) visitElement(el, hosts, closed);
+      for (const el of node.children || []) visitElement(el, hosts, closed, lightHosts);
     }
 
-    function visitElement(el, hosts, closed) {
+    function visitElement(el, hosts, closed, lightHosts) {
       if (skip(el)) return;
 
       if (match(el)) {
@@ -178,14 +198,35 @@
         else matches.push({ element: el, hosts, closed });
       }
 
+      // A slot renders its assigned nodes in its own place, so that is where
+      // they belong in reading order.
+      if (el.localName === 'slot' && typeof el.assignedElements === 'function') {
+        let assigned = [];
+        try {
+          assigned = el.assignedElements({ flatten: true });
+        } catch (_) {
+          assigned = [];
+        }
+        if (assigned.length) {
+          for (const n of assigned) visitElement(n, lightHosts, closed, lightHosts);
+          return;
+        }
+        // Nothing assigned: the slot's own children are its fallback content,
+        // and that does render, so carry on into them.
+      }
+
       const sub = shadowRootOf(el);
       if (sub) {
-        visitRoot(sub, hosts.concat(el), closed || sub.mode === 'closed');
+        // Light children reach the screen only through a slot inside this root,
+        // handled above, so they are not walked separately.
+        visitRoot(sub, hosts.concat(el), closed || sub.mode === 'closed', hosts);
+        return;
       }
-      for (const child of el.children) visitElement(child, hosts, closed);
+
+      for (const child of el.children) visitElement(child, hosts, closed, lightHosts);
     }
 
-    visitRoot(root, [], false);
+    visitRoot(root, [], false, []);
     return { matches, roots, truncated };
   }
 

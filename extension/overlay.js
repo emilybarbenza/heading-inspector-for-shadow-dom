@@ -12,7 +12,7 @@
   }
 
   const walker = window.__shadowWalker;
-  if (!walker) {
+  if (!walker || typeof walker.walk !== 'function') {
     console.error('Heading Inspector for Shadow DOM: walker.js did not load.');
     return;
   }
@@ -28,6 +28,7 @@
   const LABEL_MODES = ['level', 'component', 'chain'];
   // Coalesce mutation bursts, but never let a busy page postpone a rescan past
   // the ceiling.
+  const NON_RENDERING_NAME = new Set(['script', 'style', 'template', 'noscript']);
   const RESCAN_DEBOUNCE = 250;
   const RESCAN_MAX_WAIT = 1000;
   // A custom element already sitting in the markup can be upgraded at any time.
@@ -112,6 +113,10 @@
   let chipNote = null;
   let chipPanelBtn = null;
   let panelHost = null;
+  // Kept from attachShadow rather than read back off the host: a page that has
+  // patched attachShadow to force closed mode makes host.shadowRoot null, and
+  // every panel lookup would throw.
+  let panelRoot = null;
   let panelList = null;
   let panelSummary = null;
   let panelStatus = null;
@@ -131,6 +136,7 @@
   let observers = [];
   let altHeld = false;
   let flashEl = null;
+  let scaleProbe = null;
 
   function emptyStats() {
     return {
@@ -202,20 +208,43 @@
   // the only way to know which one wins. Without this, role="none heading" and
   // role="button heading" both read as headings when the browser says they are
   // a presentational element and a button.
+  // Concrete WAI-ARIA roles, plus the DPUB and graphics modules. Two rules make
+  // this list load-bearing rather than decorative:
+  //
+  //  - ARIA's *abstract* roles (structure, widget, section, command, input,
+  //    range, roletype, sectionhead, landmark, composite, select, window) are
+  //    deliberately absent. Authors may not use them and browsers ignore them
+  //    outright, so `<h2 role="structure">` is still a heading. Treating them as
+  //    real roles made such headings vanish from the outline entirely.
+  //  - doc-* and graphics-* are present because they are real roles that DO
+  //    displace the native one: Chrome computes `<h2 role="doc-subtitle">` as a
+  //    doc-subtitle, not a heading, and leaving them out invented headings.
+  // Concrete WAI-ARIA roles. ARIA's *abstract* roles — structure, widget,
+  // section, command, input, range, roletype, sectionhead, landmark, composite,
+  // select, window — are deliberately absent: authors may not use them and
+  // browsers ignore them outright, so `<h2 role="structure">` is still a
+  // heading. Treating them as real roles made such headings vanish entirely.
   const ARIA_ROLES = new Set(
     ('alert alertdialog application article associationlist associationlistitemkey ' +
       'associationlistitemvalue banner blockquote button caption cell checkbox code ' +
-      'columnheader combobox command comment complementary composite contentinfo ' +
-      'definition deletion dialog directory document emphasis feed figure form ' +
-      'generic grid gridcell group heading image img input insertion landmark link ' +
-      'list listbox listitem log main mark marquee math menu menubar menuitem ' +
-      'menuitemcheckbox menuitemradio meter navigation none note option paragraph ' +
-      'presentation progressbar radio radiogroup range region roletype row rowgroup ' +
-      'rowheader scrollbar search searchbox section sectionhead select separator ' +
-      'slider spinbutton status strong structure subscript suggestion superscript ' +
+      'columnheader combobox comment complementary contentinfo definition deletion ' +
+      'dialog directory document emphasis feed figure form generic grid gridcell ' +
+      'group heading image img insertion link list listbox listitem log main mark ' +
+      'marquee math menu menubar menuitem menuitemcheckbox menuitemradio meter ' +
+      'navigation none note option paragraph presentation progressbar radio ' +
+      'radiogroup region row rowgroup rowheader scrollbar search searchbox ' +
+      'separator slider spinbutton status strong subscript suggestion superscript ' +
       'switch tab table tablist tabpanel term textbox time timer toolbar tooltip ' +
-      'tree treegrid treeitem widget window').split(' ')
+      'tree treegrid treeitem').split(' ')
   );
+
+  // The DPUB and graphics modules, by shape rather than by name. They matter
+  // because they displace the native role — Chrome computes
+  // `<h2 role="doc-subtitle">` as a doc-subtitle, not a heading — and listing
+  // all fifty would cost more of the bookmarklet's size budget than the
+  // precision is worth. A made-up `doc-` token being taken for a real role is a
+  // far better failure than a real one being missed.
+  const ROLE_MODULES = /^(?:doc|graphics)-[a-z]+$/;
 
   // The role the browser actually computes from a fallback list: the first
   // recognised token. Unknown tokens are skipped, not treated as a role.
@@ -223,7 +252,7 @@
     const attr = (el.getAttribute('role') || '').trim().toLowerCase();
     if (!attr) return '';
     for (const token of attr.split(/\s+/)) {
-      if (ARIA_ROLES.has(token)) return token;
+      if (ARIA_ROLES.has(token) || ROLE_MODULES.test(token)) return token;
     }
     return '';
   }
@@ -237,12 +266,23 @@
     if (native && role && !isRoleHeading) return null;
     if (!native && !isRoleHeading) return null;
 
-    // Strictly an integer. parseInt would read aria-level="9e2" as 9 and invent
-    // a heading level the browser never computes, which then manufactures a
-    // skipped-level advisory out of nothing.
+    // Match what the browser actually computes, measured against Chrome's
+    // accessibility tree rather than read off the spec:
+    //   ""            treated as absent, so the native level stands
+    //   "2.5" "3abc"  C-style prefix parse, so 2 and 3
+    //   "0" "-1" "abc"  anything below 1 clamps to 1
+    //   "10" and up   rejected as invalid, so the native level stands again
+    // A stricter reading invented levels no browser produces — aria-level="99"
+    // became an H99 and manufactured a skipped-level advisory out of nothing —
+    // and ignored values browsers do honour.
     const raw = el.getAttribute('aria-level');
-    const parsed = raw !== null && /^\s*\d+\s*$/.test(raw) ? parseInt(raw, 10) : NaN;
-    const hasAria = Number.isInteger(parsed) && parsed > 0;
+    let parsed = NaN;
+    if (raw !== null && raw !== '') {
+      const n = parseInt(raw, 10);
+      const clamped = Number.isNaN(n) ? 1 : Math.max(1, n);
+      if (clamped <= 9) parsed = clamped;
+    }
+    const hasAria = Number.isInteger(parsed);
 
     if (native) {
       const tagLevel = Number(native[1]);
@@ -360,13 +400,12 @@
    * nothing reaches the screen.
    */
   function renderedRect(el) {
-    let rects;
     try {
-      rects = el.getClientRects();
+      if (el.getClientRects().length) return el.getBoundingClientRect();
     } catch (_) {
+      // Pages do patch these; a throw must cost one heading, not the tool.
       return null;
     }
-    if (rects.length) return el.getBoundingClientRect();
 
     let display = '';
     try {
@@ -401,9 +440,6 @@
    * @returns {'rendered'|'sr-only'|'hidden'|'not-rendered'}
    */
   function visibility(el) {
-    const r = renderedRect(el);
-    if (!r) return 'not-rendered';
-
     let style;
     try {
       style = getComputedStyle(el);
@@ -411,6 +447,30 @@
       return 'not-rendered';
     }
     if (style.visibility === 'hidden' || style.visibility === 'collapse') return 'hidden';
+
+    const r = renderedRect(el);
+    if (!r) return 'not-rendered';
+
+    // A laid-out box is not proof of being in the accessibility tree. A collapsed
+    // <details>, a hidden="until-found" section and content-visibility:hidden all
+    // reserve layout while the browser drops their contents from the tree, so a
+    // heading in a closed disclosure was being listed as though a screen reader
+    // could reach it — and a real skipped level either side of it went unreported
+    // because the phantom heading filled the gap.
+    //
+    // checkVisibility() answers this and geometry cannot, but it is not a
+    // wholesale replacement: it reports false for display:contents, which IS in
+    // the tree and which renderedRect has already resolved above, and true for
+    // visibility:hidden, which is not and which was caught before this. The
+    // default options are deliberate — content-visibility:auto reports true, so
+    // headings don't pop in and out of the outline as the page scrolls.
+    if (style.display !== 'contents' && typeof el.checkVisibility === 'function') {
+      try {
+        if (!el.checkVisibility()) return 'not-rendered';
+      } catch (_) {
+        /* older engine: fall through to geometry */
+      }
+    }
 
     // Clipped to nothing: the modern sr-only recipe (1px box plus overflow
     // hidden or clip-path). Still announced, so it stays in the outline.
@@ -420,13 +480,19 @@
     if (r.width <= 4 && r.height <= 4) return 'sr-only';
 
     // Parked outside the document: the older sr-only recipe (left:-9999px).
-    // Only the negative side is tested. Layout coordinates inside a scroll
-    // container are never negative, so this can't fire on ordinary content,
-    // whereas comparing against the document width flagged every heading in a
-    // horizontally scrolling kanban board or wide table as screen-reader only.
-    // Parking an element to the *right* is a rare enough recipe to miss.
-    const pos = layoutPosition(el, r);
-    if (pos.left + r.width < 0 || pos.top + r.height < 0) return 'sr-only';
+    //
+    // Only meaningful in a left-to-right horizontal flow. RTL documents lay
+    // ordinary content out at negative x, and Chrome reports negative scrollLeft
+    // for RTL and vertical-rl scroll containers, so applying this there badged
+    // plainly visible headings as screen-reader only — the same false positive
+    // as the kanban case, relocated to the writing direction where horizontal
+    // panes are most common. The size test above is writing-mode agnostic and
+    // still catches the modern clipped recipe.
+    const flow = style.writingMode || 'horizontal-tb';
+    if (style.direction !== 'rtl' && flow === 'horizontal-tb') {
+      const pos = layoutPosition(el, r);
+      if (pos.left + r.width < 0 || pos.top + r.height < 0) return 'sr-only';
+    }
 
     return 'rendered';
   }
@@ -482,6 +548,84 @@
   }
 
   /**
+   * The quoted parts of a CSS `content` value. Generated content contributes to
+   * the accessible name but has no DOM text at all, so a heading whose label is
+   * an icon-font glyph or a CSS counter looks empty to anything reading the DOM
+   * — and gets reported as an empty-heading violation it does not have.
+   */
+  function generatedText(el, pseudo) {
+    let value = '';
+    try {
+      value = getComputedStyle(el, pseudo).content;
+    } catch (_) {
+      return '';
+    }
+    if (!value || value === 'none' || value === 'normal') return '';
+    const quoted = value.match(/"((?:[^"\\]|\\.)*)"/g);
+    if (!quoted) return '';
+    return quoted.map((q) => q.slice(1, -1).replace(/\\(.)/g, '$1')).join('');
+  }
+
+  /**
+   * Text as the accessible name computation sees it, which is not the same as
+   * the text on screen. Subtrees the browser drops from the name — aria-hidden
+   * and display:none — are pruned, and generated content is added.
+   *
+   * Kept apart from composedText deliberately: that one answers "what does this
+   * heading say on screen", which the panel shows, while this answers "what does
+   * a screen reader announce", which decides whether the heading is empty. A
+   * heading reading `<h2><span aria-hidden="true">Decorative</span></h2>` has
+   * visible text and no accessible name, and the audit has to say both.
+   */
+  function nameText(node, depth) {
+    const d = depth || 0;
+    if (d > 32 || !node) return '';
+    if (node.nodeType === 3) return node.nodeValue || '';
+    if (node.nodeType !== 1) return '';
+
+    const el = /** @type {Element} */ (node);
+    if (NON_RENDERING_NAME.has(el.localName)) return '';
+    if (el.getAttribute('aria-hidden') === 'true') return '';
+    try {
+      if (getComputedStyle(el).display === 'none') return '';
+    } catch (_) {
+      /* keep going */
+    }
+
+    let out = generatedText(el, '::before');
+
+    if (el.localName === 'slot' && typeof el.assignedNodes === 'function') {
+      const assigned = el.assignedNodes({ flatten: true });
+      if (assigned.length) {
+        for (const n of assigned) out += nameText(n, d + 1);
+        return out + generatedText(el, '::after');
+      }
+    }
+
+    const sub = walker.shadowRootOf(el);
+    for (const child of sub ? sub.childNodes : el.childNodes) out += nameText(child, d + 1);
+    return out + generatedText(el, '::after');
+  }
+
+  /**
+   * The accessible name of an element referenced by aria-labelledby. The
+   * reference contributes that element's *name*, not merely its text, so a
+   * target carrying aria-label or an <img alt> names the heading. Reading only
+   * text reported such headings as empty.
+   *
+   * Hidden targets are included on purpose: referencing a display:none element
+   * to name something is a documented technique, and browsers honour it.
+   */
+  function refName(t) {
+    const label = (t.getAttribute('aria-label') || '').trim();
+    if (label) return label;
+    const text = walker.composedText(t).replace(/\s+/g, ' ').trim();
+    if (text) return text;
+    if (t.localName === 'img') return (t.getAttribute('alt') || '').trim();
+    return imageNames(t).replace(/\s+/g, ' ').trim();
+  }
+
+  /**
    * Alt text from images inside a heading, descending the flattened tree the
    * same way composedText does. querySelectorAll stops dead at a shadow
    * boundary, and an icon rendered by a child component is the common case.
@@ -531,7 +675,7 @@
       for (const id of ref.trim().split(/\s+/)) {
         const t = root && root.getElementById ? root.getElementById(id) : null;
         if (t) {
-          const txt = walker.composedText(t).replace(/\s+/g, ' ').trim();
+          const txt = refName(t);
           if (txt) parts.push(txt);
         }
       }
@@ -541,7 +685,8 @@
     const label = (el.getAttribute('aria-label') || '').trim();
     if (label) return label;
 
-    if (text) return text;
+    const named = nameText(el).replace(/\s+/g, ' ').trim();
+    if (named) return named;
 
     // An image with alt text gives the heading a name even with no text node.
     let imgAlt = '';
@@ -962,6 +1107,11 @@
         height: 0 !important;
         pointer-events: none !important;
         z-index: 2147483645 !important;
+        /* The page's writing mode is not ours to inherit: on a vertical-rl site
+           the whole panel rendered rotated, and on an RTL one the controls
+           mirrored and the counts bidi-reordered into nonsense. */
+        direction: ltr !important;
+        writing-mode: horizontal-tb !important;
         forced-color-adjust: none;
       }
       /* Set while the host lives inside an open modal dialog (see enterModal).
@@ -983,6 +1133,20 @@
         left: 0;
         overflow: hidden;
         overflow: clip;
+        /* Clipping stops the boxes extending the page's scrollable area, but a
+           box is inflated by BOX_PAD on every side, so a full-width heading had
+           its left, right and top borders clipped away and rendered as a single
+           underline. overflow-clip-margin widens the paint region without
+           putting anything back into scrollable overflow, which is the point of
+           clipping here. */
+        overflow-clip-margin: 12px;
+      }
+      /* A fixed-size ruler used to measure how much an ancestor zoom or transform
+         is scaling everything we draw. Hidden, zero-height, costs one layout
+         read per frame. */
+      .probe {
+        position: absolute; top: 0; left: 0;
+        width: 100px; height: 0; visibility: hidden; pointer-events: none;
       }
       .box, .tag {
         position: absolute;
@@ -1056,6 +1220,9 @@
     `;
     layer = document.createElement('div');
     layer.className = 'layer';
+    scaleProbe = document.createElement('div');
+    scaleProbe.className = 'probe';
+    layer.appendChild(scaleProbe);
     shadow.append(style, layer);
     mount(layerHost);
   }
@@ -1081,6 +1248,11 @@
         left: var(--chip-left) !important;
         bottom: var(--chip-bottom) !important;
         z-index: 2147483647 !important;
+        /* The page's writing mode is not ours to inherit: on a vertical-rl site
+           the whole panel rendered rotated, and on an RTL one the controls
+           mirrored and the counts bidi-reordered into nonsense. */
+        direction: ltr !important;
+        writing-mode: horizontal-tb !important;
         forced-color-adjust: none;
       }
       .chip {
@@ -1217,7 +1389,8 @@
     panelHost = document.createElement('div');
     panelHost.id = PANEL_ID;
 
-    const shadow = panelHost.attachShadow({ mode: 'open' });
+    panelRoot = panelHost.attachShadow({ mode: 'open' });
+    const shadow = panelRoot;
     const style = document.createElement('style');
     style.textContent = `
       /* Every edge is expressed here rather than in JS, so switching docks is a
@@ -1227,6 +1400,11 @@
       :host {
         position: fixed !important;
         z-index: 2147483646 !important;
+        /* The page's writing mode is not ours to inherit: on a vertical-rl site
+           the whole panel rendered rotated, and on an RTL one the controls
+           mirrored and the counts bidi-reordered into nonsense. */
+        direction: ltr !important;
+        writing-mode: horizontal-tb !important;
         forced-color-adjust: none;
         --bg: #ffffff; --fg: #14181d; --muted: #5a6672; --line: #d7dde3;
         /* Caps so the panel can never swallow a phone-width viewport. */
@@ -1467,7 +1645,7 @@
     }
     dockSeg.addEventListener('keydown', (e) => {
       const btns = [...dockSeg.querySelectorAll('button')];
-      const i = btns.indexOf(panelHost.shadowRoot.activeElement);
+      const i = btns.indexOf(panelRoot.activeElement);
       if (i < 0) return;
       let ni = i;
       if (e.key === 'ArrowRight' || e.key === 'ArrowDown') ni = (i + 1) % btns.length;
@@ -1511,7 +1689,7 @@
     // Radio-group arrow keys: move and select, so the group is a single tab stop.
     seg.addEventListener('keydown', (e) => {
       const btns = [...seg.querySelectorAll('button')];
-      const i = btns.indexOf(panelHost.shadowRoot.activeElement);
+      const i = btns.indexOf(panelRoot.activeElement);
       if (i < 0) return;
       let ni = i;
       if (e.key === 'ArrowRight' || e.key === 'ArrowDown') ni = (i + 1) % btns.length;
@@ -1580,7 +1758,7 @@
     panelList.addEventListener('keydown', (e) => {
       const rows = [...panelList.querySelectorAll('.row')];
       if (!rows.length) return;
-      const i = rows.indexOf(panelHost.shadowRoot.activeElement);
+      const i = rows.indexOf(panelRoot.activeElement);
       let ni = i;
       if (e.key === 'ArrowDown') ni = i < 0 ? 0 : Math.min(i + 1, rows.length - 1);
       else if (e.key === 'ArrowUp') ni = i < 0 ? 0 : Math.max(i - 1, 0);
@@ -1683,7 +1861,7 @@
     // the panel rather than being stranded on the body where they hid it. Not on
     // start(), though: opening the tool shouldn't yank focus off the page.
     if (!v && panelHost && !(opts && opts.focus === false)) {
-      const first = panelHost.shadowRoot.querySelector('header .iconbtn');
+      const first = panelRoot.querySelector('header .iconbtn');
       if (first) first.focus();
     }
   }
@@ -1707,7 +1885,7 @@
   };
 
   function panelSize() {
-    const el = panelHost && panelHost.shadowRoot.querySelector('.panel');
+    const el = panelHost && panelRoot.querySelector('.panel');
     const r = el ? el.getBoundingClientRect() : null;
     return { w: r ? Math.round(r.width) : 340, h: r ? Math.round(r.height) : 300 };
   }
@@ -1818,7 +1996,7 @@
     if (!panelHost) return;
     panelHost.dataset.dock = dock;
 
-    const grip = panelHost.shadowRoot.querySelector('.grip');
+    const grip = panelRoot.querySelector('.grip');
     if (grip) {
       const vertical = dock === 'top' || dock === 'bottom';
       grip.setAttribute('aria-orientation', vertical ? 'horizontal' : 'vertical');
@@ -1828,7 +2006,7 @@
           : 'Drag to resize, or use the arrow keys.';
     }
 
-    for (const b of panelHost.shadowRoot.querySelectorAll('.dockseg button')) {
+    for (const b of panelRoot.querySelectorAll('.dockseg button')) {
       const chosen = b.dataset.dock === dock;
       b.setAttribute('aria-checked', chosen ? 'true' : 'false');
       b.tabIndex = chosen ? 0 : -1;
@@ -1855,7 +2033,7 @@
 
   function updateDetailControl() {
     if (!panelHost) return;
-    for (const b of panelHost.shadowRoot.querySelectorAll('.seg:not(.dockseg) button')) {
+    for (const b of panelRoot.querySelectorAll('.seg:not(.dockseg) button')) {
       const on = b.dataset.mode === labelMode;
       b.setAttribute('aria-checked', on ? 'true' : 'false');
       // Roving tabindex: only the chosen radio is in the tab order; arrows reach
@@ -2083,10 +2261,21 @@
     // Match the clip region to whichever space we're drawing in. Inside a dialog
     // the host is viewport-pinned and contributes nothing to document scroll, so
     // it only needs to cover the culling window.
+    // Everything below is measured in screen pixels, via getBoundingClientRect.
+    // The lengths we write are CSS pixels inside the layer, and a `zoom` or a
+    // `transform` on an ancestor multiplies those two spaces together: boxes
+    // came out oversized and drifted further from their heading the further down
+    // the page they were. Measuring a known-width ruler recovers the factor.
+    let scale = 1;
+    if (scaleProbe) {
+      const pw = scaleProbe.getBoundingClientRect().width;
+      if (pw > 0) scale = pw / 100;
+    }
+
     const clipW = modalHome ? innerWidth : document.documentElement.scrollWidth;
     const clipH = modalHome ? innerHeight : document.documentElement.scrollHeight;
-    layer.style.width = `${clipW}px`;
-    layer.style.height = `${clipH}px`;
+    layer.style.width = `${clipW / scale}px`;
+    layer.style.height = `${clipH / scale}px`;
 
     for (const item of items) {
       const el = item.el;
@@ -2097,12 +2286,12 @@
 
       // Inflate the tight bounding box by BOX_PAD on every side, so the outline
       // frames the heading with a margin instead of hugging the text.
-      const w = Math.max(r.width, MIN_BOX) + BOX_PAD * 2;
-      const h = Math.max(r.height, MIN_BOX) + BOX_PAD * 2;
+      const w = (Math.max(r.width, MIN_BOX) + BOX_PAD * 2) / scale;
+      const h = (Math.max(r.height, MIN_BOX) + BOX_PAD * 2) / scale;
       // Document coordinates, so the box lives in the scrolled page and the
       // browser moves it with the content instead of us chasing it on scroll.
-      const bx = Math.round(r.left + scrollX - originX) - BOX_PAD;
-      const by = Math.round(r.top + scrollY - originY) - BOX_PAD;
+      const bx = (Math.round(r.left + scrollX - originX) - BOX_PAD) / scale;
+      const by = (Math.round(r.top + scrollY - originY) - BOX_PAD) / scale;
       // Cull to the viewport plus a one-screen buffer on each side, so boxes are
       // already placed before they scroll in, without laying out a huge page.
       if (r.bottom < -innerHeight || r.top > innerHeight * 2) continue;
@@ -2131,8 +2320,8 @@
 
       // Collision avoidance. Without it, stacked headings produce overlapping
       // labels, which ruins the screenshot the tool exists to produce.
-      const tw = tag.textContent.length * 7.3 + 12;
-      const th = 18;
+      const tw = (tag.textContent.length * 7.3 + 12) / scale;
+      const th = 18 / scale;
       // Anchor the label to the padded box, not the raw rect, so it rides just
       // above the outline.
       const homeX = Math.max(2, bx);
@@ -2151,7 +2340,7 @@
       // Keep the label inside the clip region. Sidestepping a collision can walk
       // it rightwards, and past the edge it would now be clipped away entirely
       // rather than merely overflowing.
-      lx = Math.max(0, Math.min(lx, clipW - tw));
+      lx = Math.max(0, Math.min(lx, clipW / scale - tw));
       placed.push({ l: lx, t: ly, r: lx + tw, b: ly + th });
       tag.style.transform = `translate(${lx}px, ${ly}px)`;
 
@@ -2189,11 +2378,16 @@
     const lr = layerHost.getBoundingClientRect();
     const originX = lr.left + scrollX;
     const originY = lr.top + scrollY;
+    let scale = 1;
+    if (scaleProbe) {
+      const pw = scaleProbe.getBoundingClientRect().width;
+      if (pw > 0) scale = pw / 100;
+    }
     const pad = BOX_PAD + 2;
-    const w = Math.max(r.width, MIN_BOX) + pad * 2;
-    const h = Math.max(r.height, MIN_BOX) + pad * 2;
-    const fx = Math.round(r.left + scrollX - originX) - pad;
-    const fy = Math.round(r.top + scrollY - originY) - pad;
+    const w = (Math.max(r.width, MIN_BOX) + pad * 2) / scale;
+    const h = (Math.max(r.height, MIN_BOX) + pad * 2) / scale;
+    const fx = (Math.round(r.left + scrollX - originX) - pad) / scale;
+    const fy = (Math.round(r.top + scrollY - originY) - pad) / scale;
     flashBox.style.width = `${w}px`;
     flashBox.style.height = `${h}px`;
     flashBox.style.transform = `translate(${fx}px, ${fy}px)`;
@@ -2307,6 +2501,18 @@
     return true;
   }
 
+  /**
+   * Put back anything the page discarded. Frameworks that swap <body> on
+   * navigation — Turbo, htmx, some view-transition setups — take our hosts with
+   * it, leaving the tool running, believing it is visible, and drawing into
+   * elements that are no longer in the document.
+   */
+  function remountHosts() {
+    for (const h of [layerHost, chipHost, panelHost]) {
+      if (h && !h.isConnected) mount(h);
+    }
+  }
+
   function rescan() {
     rescanDeadline = 0;
     if (!on) return;
@@ -2317,6 +2523,7 @@
     // observeAll() every time: it is what picks up shadow roots that have
     // appeared since the last scan.
     observeAll();
+    remountHosts();
     syncModalHome();
     if (!sameOutline(prev, items) || prevModal !== modalEl || prevPage !== pageProblems.join()) {
       renderPanel();
