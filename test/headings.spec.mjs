@@ -91,6 +91,43 @@ test.describe('page world (bookmarklet equivalent)', () => {
     expect(r.violations).toBe(1);
   });
 
+  test('a display:contents heading is listed and boxed by what it renders', async ({ page }) => {
+    await page.goto(fixture);
+    await page.evaluate(walkerSrc);
+    await page.evaluate(overlaySrc);
+    await page.waitForTimeout(600);
+
+    const r = await page.evaluate(() => {
+      const api = window.__shadowHeadingOutliner;
+      const target = [...document.querySelectorAll('h2')].find(
+        (h) => h.textContent.includes('Contents heading wrapping a block link')
+      );
+      const box = [...api.hosts.layer.shadowRoot.querySelectorAll('.box')].find(
+        (b) => b.style.display !== 'none' && b.__shoItem && b.__shoItem.el === target
+      );
+      const link = target.querySelector('a').getBoundingClientRect();
+      return {
+        outline: api.outlineText(),
+        ownRects: target.getClientRects().length,
+        boxed: !!box,
+        // The box has to frame the link, since that is all the heading renders.
+        boxWidth: box ? Math.round(box.getBoundingClientRect().width) : 0,
+        linkWidth: Math.round(link.width),
+      };
+    });
+
+    // Zero rects of its own, exactly like display:none — but Chrome reports it
+    // as a heading, not ignored, so leaving it out under-reports the page.
+    expect(r.ownRects).toBe(0);
+    expect(r.outline).toContain('Contents heading wrapping a block link');
+    expect(r.boxed).toBe(true);
+    expect(Math.abs(r.boxWidth - r.linkWidth)).toBeLessThan(24);
+
+    // The same declaration inside a display:none subtree still renders nothing,
+    // and computed display is still 'contents' there, so it must stay excluded.
+    expect(r.outline).not.toContain('Contents inside display:none');
+  });
+
   test('boxes scroll with the page and the panel can be hidden on its own', async ({ page }) => {
     await page.setViewportSize({ width: 900, height: 380 }); // small, so it scrolls
     await page.goto(fixture);

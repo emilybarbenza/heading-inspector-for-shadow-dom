@@ -83,7 +83,7 @@ Each heading gets an outlined box and a label.
 
 Colors are white-on-color at 5.9:1 minimum. Every box and label carries a 1px white ring so it stays legible on dark backgrounds. That's what keeps a defect screenshot usable.
 
-The chip at bottom-left leads with the number of headings in the outline, so it always equals the number of rows in the panel. Anything found but not listed is named with its reason after it — `4 headings · 2 display:none · 1 in aria-hidden` — and the parts add back up to every heading on the page. A heading is left out only when it isn't in the accessibility tree, which means one of: `display:none`, `visibility:hidden`, inside an `aria-hidden` or `inert` subtree, or behind an open modal. Nothing is ever left out for being scrolled out of view or drawn off-canvas.
+The chip at bottom-left leads with the number of headings in the outline, so it always equals the number of rows in the panel. Anything found but not listed is named with its reason after it — `4 headings · 2 display:none · 1 in aria-hidden` — and the parts add back up to every heading on the page. A heading is left out only when it isn't in the accessibility tree, which means one of: `display:none`, `visibility:hidden`, inside an `aria-hidden` or `inert` subtree, or behind an open modal. `display:contents` is not one of them: such a heading generates no box and has no client rects at all, yet browsers still expose it as a heading, so it is listed and outlined by what it actually renders — its contents. That shape turns up in card layouts, where a heading wraps a block link and is set to `contents` so the link joins the surrounding grid. Nothing is ever left out for being scrolled out of view or drawn off-canvas.
 
 | Key | Action |
 | --- | --- |

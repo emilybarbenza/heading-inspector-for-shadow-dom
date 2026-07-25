@@ -323,8 +323,8 @@
    * the sum over every scroll container tells a heading deliberately parked
    * off-canvas from one the reader has simply scrolled past.
    */
-  function layoutPosition(el) {
-    const r = el.getBoundingClientRect();
+  function layoutPosition(el, rect) {
+    const r = rect || el.getBoundingClientRect();
     let left = r.left + scrollX;
     let top = r.top + scrollY;
     // The same flattened-tree climb closestFlattened makes, and it has to be the
@@ -345,6 +345,49 @@
   }
 
   /**
+   * The box to measure a heading by.
+   *
+   * Normally that's the element's own, but `display: contents` generates no box
+   * at all while staying in the accessibility tree — Chrome reports such a
+   * heading as a heading, not ignored. Judging by client rects alone therefore
+   * files a heading the browser announces as "not rendered", and the outline
+   * silently loses it. It is a common shape: a card whose heading wraps a block
+   * link, with the heading set to contents so the link participates in the grid.
+   *
+   * What it renders is its contents, so measure those. A Range covers text
+   * nodes too, which querySelectorAll would miss. An empty result means an
+   * ancestor is display:none — computed display is still 'contents' there, but
+   * nothing reaches the screen.
+   */
+  function renderedRect(el) {
+    let rects;
+    try {
+      rects = el.getClientRects();
+    } catch (_) {
+      return null;
+    }
+    if (rects.length) return el.getBoundingClientRect();
+
+    let display = '';
+    try {
+      display = getComputedStyle(el).display;
+    } catch (_) {
+      return null;
+    }
+    if (display !== 'contents') return null;
+
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const r = range.getBoundingClientRect();
+      range.detach();
+      return r.width || r.height ? r : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /**
    * The split that matters here is the accessibility tree, not the screen.
    * 'rendered' and 'sr-only' are both in the tree, so both are part of the
    * outline a screen-reader user navigates and both belong in the panel.
@@ -358,16 +401,15 @@
    * @returns {'rendered'|'sr-only'|'hidden'|'not-rendered'}
    */
   function visibility(el) {
-    let rects;
+    const r = renderedRect(el);
+    if (!r) return 'not-rendered';
+
+    let style;
     try {
-      rects = el.getClientRects();
+      style = getComputedStyle(el);
     } catch (_) {
       return 'not-rendered';
     }
-    if (!rects.length) return 'not-rendered';
-
-    const r = el.getBoundingClientRect();
-    const style = getComputedStyle(el);
     if (style.visibility === 'hidden' || style.visibility === 'collapse') return 'hidden';
 
     // Clipped to nothing: the modern sr-only recipe (1px box plus overflow
@@ -383,7 +425,7 @@
     // whereas comparing against the document width flagged every heading in a
     // horizontally scrolling kanban board or wide table as screen-reader only.
     // Parking an element to the *right* is a rare enough recipe to miss.
-    const pos = layoutPosition(el);
+    const pos = layoutPosition(el, r);
     if (pos.left + r.width < 0 || pos.top + r.height < 0) return 'sr-only';
 
     return 'rendered';
@@ -2021,13 +2063,8 @@
       const el = item.el;
       if (!el.isConnected) continue;
 
-      let r;
-      try {
-        if (!el.getClientRects().length) continue;
-        r = el.getBoundingClientRect();
-      } catch (_) {
-        continue;
-      }
+      const r = renderedRect(el);
+      if (!r) continue;
 
       // Inflate the tight bounding box by BOX_PAD on every side, so the outline
       // frames the heading with a margin instead of hugging the text.
@@ -2113,14 +2150,8 @@
       flashBox.style.display = 'none';
       return;
     }
-    let r;
-    try {
-      if (!flashEl.getClientRects().length) {
-        flashBox.style.display = 'none';
-        return;
-      }
-      r = flashEl.getBoundingClientRect();
-    } catch (_) {
+    const r = renderedRect(flashEl);
+    if (!r) {
       flashBox.style.display = 'none';
       return;
     }
