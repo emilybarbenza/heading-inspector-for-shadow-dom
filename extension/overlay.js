@@ -519,7 +519,7 @@
    * icon-only and aria-labelled headings would falsely flag as empty-heading
    * violations.
    */
-  function accName(el) {
+  function accName(el, text) {
     // Spec order: aria-labelledby outranks aria-label, and every reference in
     // the list contributes, joined by spaces — not just the first one that
     // resolves. IDREFs don't cross shadow boundaries, so each is resolved
@@ -541,7 +541,6 @@
     const label = (el.getAttribute('aria-label') || '').trim();
     if (label) return label;
 
-    const text = walker.composedText(el).replace(/\s+/g, ' ').trim();
     if (text) return text;
 
     // An image with alt text gives the heading a name even with no text node.
@@ -632,13 +631,19 @@
 
       if (vis === 'sr-only') stats.srOnly++;
 
+      // Computed once here and reused by the panel, the copied outline and the
+      // change check below, instead of three separate composedText walks.
+      const text = walker.composedText(m.element).replace(/\s+/g, ' ').trim();
+      const name = accName(m.element, text);
+
       seq.push({
         el: m.element,
         level: info.level,
         fromAria: info.fromAria,
         srOnly: vis === 'sr-only',
-        name: accName(m.element),
-        empty: accName(m.element) === '',
+        text,
+        name,
+        empty: name === '',
         hosts: m.hosts,
         closed: m.closed,
         problems: [],
@@ -695,14 +700,38 @@
 
   // ----------------------------------------------------------- label building
 
+  /**
+   * An identifier as a CSS selector component. Concatenating raw ids and classes
+   * produces selectors that are wrong rather than merely ugly: `#a.b` reads as
+   * "id a, class b", and Tailwind's `md:flex` or `w-1/2` throw outright. Both
+   * are silent failures in the one artifact this tool exists to hand to a
+   * developer.
+   */
+  function cssEscape(value) {
+    const v = String(value);
+    try {
+      return CSS.escape(v);
+    } catch (_) {
+      // Pre-2016 fallback: escape everything that isn't plainly safe.
+      return v.replace(/[^\w-]/g, '\\$&');
+    }
+  }
+
+  // A string that survives being embedded in the single-quoted JS literal that
+  // consoleExpression builds. CSS.escape emits backslashes, and JS would eat
+  // them on the way back out, undoing the escaping above.
+  function jsQuote(value) {
+    return String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  }
+
   function leafDescriptor(el) {
     let s = el.localName || 'element';
     if (!/^h[1-6]$/.test(s) && effectiveRole(el) === 'heading') {
-      s += '[role=heading]';
+      s += '[role="heading"]';
     }
-    if (el.id) s += `#${el.id}`;
+    if (el.id) s += `#${cssEscape(el.id)}`;
     const classes = (el.getAttribute('class') || '').trim().split(/\s+/).filter(Boolean);
-    if (classes.length) s += '.' + classes.slice(0, 3).join('.');
+    if (classes.length) s += '.' + classes.slice(0, 3).map(cssEscape).join('.');
     return s;
   }
 
@@ -741,9 +770,9 @@
   function consoleExpression(item) {
     let expr = 'document';
     for (const h of item.hosts) {
-      expr += `.querySelector('${h.localName}').shadowRoot`;
+      expr += `.querySelector('${jsQuote(h.localName)}').shadowRoot`;
     }
-    expr += `\n  .querySelector('${leafDescriptor(item.el)}')`;
+    expr += `\n  .querySelector('${jsQuote(leafDescriptor(item.el))}')`;
     return expr;
   }
 
@@ -753,7 +782,7 @@
     if (item.srOnly) flags.push('screen-reader only');
     const lines = [
       `H${item.level}${flags.length ? ` (${flags.join(', ')})` : ''}`,
-      walker.composedText(item.el).replace(/\s+/g, ' ').trim().slice(0, 120),
+      item.text.slice(0, 120),
       chainString(item),
       consoleExpression(item),
     ];
@@ -798,7 +827,7 @@
       for (const code of item.problems) {
         flags.push(`${PROBLEMS[code].tier === VIOLATION ? '✕' : '⚠'} ${PROBLEMS[code].short}`);
       }
-      const text = walker.composedText(item.el).replace(/\s+/g, ' ').trim().slice(0, 80);
+      const text = item.text.slice(0, 80);
       const shown = text || (item.name ? `${item.name.slice(0, 80)} (from label)` : '(no text)');
       lines.push(
         `${indent}H${item.level}  ${shown}${flags.length ? `  [${flags.join(', ')}]` : ''}`
@@ -1935,7 +1964,7 @@
       // A heading can be named by a label or an icon's alt text and have no text
       // of its own. Saying "(no text)" there contradicts the tool's own verdict
       // that it isn't an empty heading, so show the name it actually computed.
-      const name = walker.composedText(item.el).replace(/\s+/g, ' ').trim();
+      const name = item.text;
       if (name) {
         txt.textContent = name;
       } else if (item.name) {
@@ -2264,6 +2293,12 @@
         a[i].level !== b[i].level ||
         a[i].srOnly !== b[i].srOnly ||
         a[i].empty !== b[i].empty ||
+        // Text, because a heading can be rewritten in place without its element,
+        // level or findings changing at all — async content and i18n do it
+        // constantly. Leaving it out let the panel show text the page no longer
+        // has, while the copied outline read the live value and disagreed.
+        a[i].text !== b[i].text ||
+        a[i].name !== b[i].name ||
         a[i].problems.join() !== b[i].problems.join()
       ) {
         return false;

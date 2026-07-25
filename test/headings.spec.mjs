@@ -501,6 +501,93 @@ test.describe('modal dialog scoping', () => {
 });
 
 /**
+ * Things that change after the outline is first drawn.
+ */
+test.describe('live updates', () => {
+  test('a heading rewritten in place updates the panel', async ({ page }) => {
+    await page.setContent('<h1>One</h1><h2 id="t">Original text</h2>');
+    await page.evaluate(walkerSrc);
+    await page.evaluate(overlaySrc);
+    await page.waitForTimeout(400);
+
+    const rows = () =>
+      page.evaluate(() =>
+        [...window.__shadowHeadingOutliner.hosts.panel.shadowRoot.querySelectorAll('.row')].map(
+          (r) => r.querySelector('.txt').textContent
+        )
+      );
+    expect(await rows()).toEqual(['One', 'Original text']);
+
+    // Replacing the child nodes fires the observer, but the element, level and
+    // findings are all unchanged — so a change check that ignores text would
+    // skip the re-render and leave the panel showing text the page no longer has.
+    await page.evaluate(() => {
+      document.getElementById('t').textContent = 'Rewritten';
+    });
+    await page.waitForTimeout(700);
+    expect(await rows()).toEqual(['One', 'Rewritten']);
+
+    // Editing the text node in place fires nothing at all — characterData isn't
+    // observed, deliberately, since a page with a ticking counter would rescan
+    // forever. The periodic safety scan is what has to notice this one.
+    await page.evaluate(() => {
+      document.getElementById('t').firstChild.data = 'Edited in place';
+    });
+    await page.waitForTimeout(2500);
+    expect(await rows()).toEqual(['One', 'Edited in place']);
+  });
+
+  test('the copied selector survives ids and classes that need escaping', async ({ page }) => {
+    await page.setContent(`
+      <h1>Page</h1>
+      <h2 id="a.b">Dot in id</h2>
+      <h2 id="2col">Digit-first id</h2>
+      <h2 class="md:flex w-1/2">Tailwind classes</h2>
+      <h2 id="quote'd">Apostrophe id</h2>`);
+    await page.evaluate(() => {
+      window.__copied = [];
+      Object.defineProperty(navigator, 'clipboard', {
+        value: { writeText: (t) => (window.__copied.push(t), Promise.resolve()) },
+        configurable: true,
+      });
+    });
+    await page.evaluate(walkerSrc);
+    await page.evaluate(overlaySrc);
+    await page.waitForTimeout(400);
+
+    const results = await page.evaluate(async () => {
+      const api = window.__shadowHeadingOutliner;
+      const boxes = [...api.hosts.layer.shadowRoot.querySelectorAll('.box')].filter(
+        (b) => b.style.display !== 'none'
+      );
+      const out = [];
+      for (const box of boxes) {
+        window.__copied.length = 0;
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Alt', altKey: true }));
+        box.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
+        await new Promise((r) => setTimeout(r, 20));
+        const rec = window.__copied[0] || '';
+        const expr = (rec.match(/document[\s\S]*?\)/) || [''])[0];
+        let ok = false;
+        try {
+          ok = eval(expr) === box.__shoItem.el;
+        } catch (_) {
+          ok = false;
+        }
+        out.push({ heading: box.__shoItem.text, ok });
+      }
+      return out;
+    });
+
+    // `#a.b` reads as "id a, class b" unescaped, and Tailwind's md:flex and w-1/2
+    // throw SyntaxError — both silently useless in the artifact this tool exists
+    // to hand a developer.
+    expect(results).toHaveLength(5);
+    for (const r of results) expect(r.ok, `selector for "${r.heading}"`).toBe(true);
+  });
+});
+
+/**
  * Frames. The extension injects with allFrames, so every same-origin iframe runs
  * its own copy of the tool in its own coordinate space.
  */
