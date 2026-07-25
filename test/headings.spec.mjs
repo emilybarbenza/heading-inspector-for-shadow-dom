@@ -770,6 +770,56 @@ test.describe('iframes', () => {
     expect(perFrame.every((f) => f.layer)).toBe(true);
   });
 
+  test('headings inside same-origin frames are listed, not just outlined', async ({ page, browserName }) => {
+    test.skip(browserName !== 'chromium', 'needs same-origin file:// frames');
+    await injectEverywhere(page);
+    // The safety scan is what notices frames that finished injecting after the
+    // top frame first scanned.
+    await page.waitForTimeout(2000);
+
+    const r = await page.evaluate(() => {
+      const api = window.__shadowHeadingOutliner;
+      const sr = api.hosts.panel.shadowRoot;
+      return {
+        rows: sr.querySelectorAll('.row').length,
+        dividers: [...sr.querySelectorAll('.framerow')].map((d) => d.textContent),
+        chipLead: Number(/^(\d+)/.exec(api.hosts.chip.shadowRoot.querySelector('.counts').textContent)[1]),
+        framedText: [...sr.querySelectorAll('.row')].map((x) => x.querySelector('.txt').textContent),
+      };
+    });
+
+    // A frame draws its own boxes but has no panel, so without borrowing its
+    // outline its headings are highlighted on screen and listed nowhere, which
+    // reads as the outline losing headings.
+    expect(r.dividers.length).toBeGreaterThan(0);
+    expect(r.framedText).toContain('Heading inside the frame');
+    // The lead count still equals the number of rows, frames included.
+    expect(r.chipLead).toBe(r.rows);
+  });
+
+  test('activating a frame row scrolls inside that frame', async ({ page, browserName }) => {
+    test.skip(browserName !== 'chromium', 'needs same-origin file:// frames');
+    await injectEverywhere(page);
+    await page.waitForTimeout(2000);
+
+    const framePos = () =>
+      page.frames()[1].evaluate(() => Math.round(document.scrollingElement.scrollTop));
+
+    const moved = await page.evaluate(() => {
+      const sr = window.__shadowHeadingOutliner.hosts.panel.shadowRoot;
+      const rows = [...sr.querySelectorAll('.row')];
+      const target = rows.find((x) => x.querySelector('.txt').textContent === 'Heading inside the frame');
+      if (!target) return false;
+      target.click();
+      return true;
+    });
+    expect(moved).toBe(true);
+    await page.waitForTimeout(800);
+    // The element lives in another document, so activating the row has to call
+    // back into that frame rather than trying to scroll it from here.
+    expect(await framePos()).toBeGreaterThan(0);
+  });
+
   test('closing from the top frame clears the frames too', async ({ page, browserName }) => {
     // Needs a page that can script its own same-origin iframe; Firefox gives
     // file:// documents unique origins with no launch flag to opt out.

@@ -133,6 +133,8 @@
   let rescanDeadline = 0;
   let safetyTimer = 0;
   let modalHome = null;
+  // Outlines borrowed from same-origin sub-frames, refreshed on each scan.
+  let frameOutlines = [];
   let observers = [];
   let altHeld = false;
   let flashEl = null;
@@ -795,6 +797,23 @@
       });
     }
 
+    // Same-origin frames run their own copy of the tool and draw their own
+    // boxes, but only the top frame has a panel. Without borrowing their
+    // outlines their headings are highlighted on screen and listed nowhere,
+    // which reads exactly like the outline losing headings.
+    frameOutlines = [];
+    if (isTopFrame()) {
+      let n = 0;
+      eachSubframeTool((api) => {
+        try {
+          const list = api.outline;
+          if (list && list.length) frameOutlines.push({ api, list, label: `Frame ${++n}` });
+        } catch (_) {
+          /* frame went away mid-scan */
+        }
+      });
+    }
+
     validate(seq, !!modalEl);
     for (const item of seq) {
       for (const code of item.problems) {
@@ -1024,8 +1043,12 @@
   // The lead number is what the outline actually lists, so the count and the
   // rows can never disagree. Anything found but not listed is named with its
   // reason, and the parts add back up to every heading on the page.
+  function framedCount() {
+    return frameOutlines.reduce((t, f) => t + f.list.length, 0);
+  }
+
   function countsLine() {
-    const n = items.length;
+    const n = items.length + framedCount();
     const parts = [`${n} heading${n === 1 ? '' : 's'}`];
     if (stats.violations) parts.push(`\u2715 ${stats.violations} violation${stats.violations === 1 ? '' : 's'}`);
     const adv = stats.advisories + pageProblems.length;
@@ -1543,10 +1566,32 @@
         overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
       }
       .summary { font-size: 12px; color: var(--muted); }
+      /* The explanatory notes are collapsed by default. Each one earns its place
+         (an outline that quietly lists fewer headings than the page has is the
+         failure this tool exists to avoid) but together they grew into a wall of
+         prose above the list, and on a short dock the outline itself was reduced
+         to three rows out of forty. The gist stays visible; the sentences are one
+         click away. */
+      .notes { font-size: 12px; color: var(--muted); }
+      .notes > summary {
+        cursor: pointer; list-style: none; display: flex; gap: 6px;
+        align-items: baseline; padding: 1px 0;
+      }
+      .notes > summary::-webkit-details-marker { display: none; }
+      .notes > summary::before {
+        content: '\\25b8'; display: inline-block; transition: transform .12s;
+        font-size: 10px; line-height: 1.6;
+      }
+      .notes[open] > summary::before { transform: rotate(90deg); }
+      .notes > summary:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+      .notes .gist { flex: 1 1 auto; }
+      .notes .full { padding: 4px 0 2px 14px; display: flex; flex-direction: column; gap: 4px; }
       .summary .v { color: var(--flag-v); font-weight: 700; }
       .summary .a { color: var(--flag-a); font-weight: 700; }
       .summary .scope { color: var(--fg); font-weight: 700; }
-      .body { overflow: auto; flex: 1 1 auto; }
+      /* min-height so a long summary can never squeeze the outline out of
+         existence: the list is the point of the panel, not the commentary. */
+      .body { overflow: auto; flex: 1 1 auto; min-height: 84px; }
       ul { list-style: none; margin: 0; padding: 4px 0; }
       .row {
         display: flex; align-items: baseline; gap: 8px; width: 100%;
@@ -1585,6 +1630,13 @@
       .foot .g.v { color: var(--flag-v); }
       .foot .g.a { color: var(--flag-a); }
       .empty-list { padding: 16px 12px; color: var(--muted); }
+      /* Marks where another document's headings begin. They are outlined in that
+         frame, so the divider says where to look. */
+      .framerow {
+        padding: 6px 10px 3px; font-size: 11px; color: var(--muted);
+        text-transform: uppercase; letter-spacing: .04em;
+        border-top: 1px solid var(--line); margin-top: 4px;
+      }
       /* Tooltip that appears on hover AND keyboard focus (native title only
          fires on hover, so keyboard users never saw it). */
       .tip {
@@ -2052,6 +2104,14 @@
 
   function renderPanel() {
     if (!panelList) return;
+
+    // The ✕/⚠ legend explains marks that may not be on screen. On a short dock
+    // that is 30px of the outline's height spent on a key to nothing.
+    const legend = panelRoot && panelRoot.querySelector('.foot');
+    if (legend) {
+      const anyFlags = stats.violations > 0 || stats.advisories > 0 || pageProblems.length > 0;
+      legend.style.display = anyFlags ? '' : 'none';
+    }
     panelList.textContent = '';
 
     // Summary line: violations, advisories, page-level findings. DOM calls,
@@ -2063,50 +2123,111 @@
       s.textContent = text;
       return s;
     };
-    panelSummary.append(`${items.length} heading${items.length === 1 ? '' : 's'}`);
+    const listed = items.length + framedCount();
+    panelSummary.append(`${listed} heading${listed === 1 ? '' : 's'}`);
     if (stats.violations) panelSummary.append(' · ', colored('v', `✕ ${stats.violations}`));
     const adv = stats.advisories + pageProblems.length;
     if (adv) panelSummary.append(' · ', colored('a', `⚠ ${adv}`));
     if (stats.srOnly) panelSummary.append(` · incl. ${stats.srOnly} screen-reader only`);
     if (!walker.canPierceClosed) panelSummary.append(' · open roots only');
 
-    // Always say why the list is shorter than the page. An unexplained short
-    // outline is exactly what makes the tool look like it's losing headings.
+    // Everything that explains the list rather than being the list. Each note
+    // has a short gist for the always-visible line and a full sentence behind
+    // the disclosure, so the outline keeps its height on a busy page.
+    const notes = [];
     if (modalEl) {
-      panelSummary.append(
-        document.createElement('br'),
-        colored('scope', 'Scoped to the open dialog.'),
-        ' Assistive tech can’t reach the page behind it. Close it to outline the page.'
-      );
+      notes.push({
+        gist: 'scoped to a dialog',
+        full:
+          'Scoped to the open dialog. Assistive tech cannot reach the page ' +
+          'behind it. Close the dialog to outline the page.',
+        flag: false,
+      });
     }
     const excluded = exclusions();
     if (excluded.length) {
-      panelSummary.append(
-        document.createElement('br'),
-        `${stats.total - items.length} more found, none of them in the accessibility tree: ${excluded.join(', ')}.`
-      );
+      notes.push({
+        gist: `${stats.total - items.length} not listed`,
+        full: `${stats.total - items.length} more found in this document, none of them in the accessibility tree: ${excluded.join(', ')}.`,
+        flag: false,
+      });
     }
-
     const frames = unreachableFrames();
     if (frames) {
-      panelSummary.append(
-        document.createElement('br'),
-        colored('a', '⚠'),
-        ` ${frames} cross-origin frame${frames === 1 ? '' : 's'} on this page. ` +
+      notes.push({
+        gist: `${frames} cross-origin frame${frames === 1 ? '' : 's'}`,
+        full:
+          `${frames} cross-origin frame${frames === 1 ? '' : 's'} on this page. ` +
           'Their headings are audited separately or not at all, and are never ' +
-          'listed here. Open a frame in its own tab to audit it.'
-      );
+          'listed here. Open a frame in its own tab to audit it.',
+        flag: true,
+      });
     }
-
     for (const code of pageProblems) {
-      panelSummary.append(
-        document.createElement('br'),
-        colored('a', '⚠'),
-        ` ${PROBLEMS[code].short}: ${PROBLEMS[code].desc}`
-      );
+      notes.push({ gist: PROBLEMS[code].short, full: PROBLEMS[code].desc, flag: true });
     }
 
-    if (!items.length) {
+    if (notes.length) {
+      const details = document.createElement('details');
+      details.className = 'notes';
+      const head = document.createElement('summary');
+      const gist = document.createElement('span');
+      gist.className = 'gist';
+      notes.forEach((n, i) => {
+        if (i) gist.append(' · ');
+        if (n.flag) gist.append(colored('a', '\u26a0'), ' ');
+        gist.append(n.gist);
+      });
+      head.append(gist);
+      details.append(head);
+
+      const full = document.createElement('div');
+      full.className = 'full';
+      for (const n of notes) {
+        const line = document.createElement('div');
+        if (n.flag) line.append(colored('a', '\u26a0'), ' ');
+        line.append(n.full);
+        full.append(line);
+      }
+      details.append(full);
+      panelSummary.append(details);
+    }
+
+    // One list built from two sources: this document's headings, and those
+    // borrowed from same-origin frames. A frame's rows carry a divider so it is
+    // obvious they belong to a different document, and activating one calls back
+    // into that frame to scroll and flash it there.
+    const entries = items.map((item) => ({
+      level: item.level,
+      text: item.text,
+      name: item.name,
+      srOnly: item.srOnly,
+      problems: item.problems,
+      more: panelMoreText(item),
+      activate: () => goTo(item),
+    }));
+    for (const frame of frameOutlines) {
+      entries.push({ divider: frame.label });
+      frame.list.forEach((row, i) => {
+        entries.push({
+          level: row.level,
+          text: row.text,
+          name: row.name,
+          srOnly: row.srOnly,
+          problems: row.problems,
+          more: '',
+          activate: () => {
+            try {
+              frame.api.focus(i);
+            } catch (_) {
+              /* the frame may have navigated away */
+            }
+          },
+        });
+      });
+    }
+
+    if (!entries.length) {
       const li = document.createElement('li');
       const div = document.createElement('div');
       div.className = 'empty-list';
@@ -2117,9 +2238,18 @@
     }
 
     let rowIdx = 0;
-    for (const item of items) {
+    for (const item of entries) {
       const li = document.createElement('li');
       li.setAttribute('role', 'none');
+
+      if (item.divider) {
+        const d = document.createElement('div');
+        d.className = 'framerow';
+        d.textContent = `${item.divider} (outlined in its own document)`;
+        li.append(d);
+        panelList.append(li);
+        continue;
+      }
       const row = document.createElement('button');
       row.type = 'button';
       row.className = 'row';
@@ -2162,7 +2292,7 @@
         row.append(s);
       }
 
-      const more = panelMoreText(item);
+      const more = item.more;
       if (more) {
         const m = document.createElement('span');
         m.className = 'more';
@@ -2193,8 +2323,7 @@
       row.setAttribute('aria-label', aria.join(', '));
       row.title = 'Scroll to this heading';
 
-      row.__shoItem = item;
-      row.addEventListener('click', () => goTo(item));
+      row.addEventListener('click', item.activate);
       li.append(row);
       panelList.append(li);
       rowIdx++;
@@ -2513,19 +2642,34 @@
     }
   }
 
+  // A fingerprint of the borrowed frame outlines, so a change in a frame's
+  // headings re-renders the panel. Without it the counts moved while the rows
+  // stayed put, because this document's own outline had not changed.
+  function frameSignature() {
+    return frameOutlines
+      .map((f) => `${f.label}:${f.list.map((r) => `${r.level}|${r.text}`).join('~')}`)
+      .join('||');
+  }
+
   function rescan() {
     rescanDeadline = 0;
     if (!on) return;
     const prev = items;
     const prevModal = modalEl;
     const prevPage = pageProblems.join();
+    const prevFrames = frameSignature();
     items = collect();
     // observeAll() every time: it is what picks up shadow roots that have
     // appeared since the last scan.
     observeAll();
     remountHosts();
     syncModalHome();
-    if (!sameOutline(prev, items) || prevModal !== modalEl || prevPage !== pageProblems.join()) {
+    if (
+      !sameOutline(prev, items) ||
+      prevModal !== modalEl ||
+      prevPage !== pageProblems.join() ||
+      prevFrames !== frameSignature()
+    ) {
       renderPanel();
     }
     schedule();
@@ -2752,6 +2896,22 @@
     },
     // Used by the top frame to keep sub-frame labels in step; see setMode.
     setMode,
+    // A frame has boxes but no panel of its own, so the top frame reads its
+    // outline through these and lists it alongside its own.
+    get outline() {
+      return items.map((i) => ({
+        level: i.level,
+        text: i.text,
+        name: i.name,
+        srOnly: i.srOnly,
+        empty: i.empty,
+        problems: i.problems.slice(),
+      }));
+    },
+    focus(index) {
+      const item = items[index];
+      if (item) goTo(item);
+    },
     get on() {
       return on;
     },
