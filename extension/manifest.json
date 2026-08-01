@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Heading Inspector for Shadow DOM",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Outlines, lists, and audits every heading on a page, including inside closed shadow roots, with WCAG-keyed hierarchy flags.",
   "permissions": ["activeTab", "scripting", "storage"],
   "background": {

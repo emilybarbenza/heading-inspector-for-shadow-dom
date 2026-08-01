@@ -244,6 +244,69 @@ test.describe('page world (bookmarklet equivalent)', () => {
     expect(esc2.layerGone).toBe(true);
   });
 
+  test('shortcuts still work where Option+Shift composes e.key (macOS layouts)', async ({ page }) => {
+    await page.goto(fixture);
+    await page.evaluate(walkerSrc);
+    await page.evaluate(overlaySrc);
+    await page.waitForTimeout(300);
+
+    // On a US Mac layout Option+Shift+P arrives as key "∏" with code
+    // "KeyP", and every layout composes something different. Matching on e.key
+    // alone made all four shortcuts dead on macOS.
+    const afterP = await page.evaluate(() => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: '∏', code: 'KeyP', altKey: true, shiftKey: true })
+      );
+      return document.getElementById('sho-panel-host').style.display;
+    });
+    expect(afterP).toBe('none');
+
+    const afterM = await page.evaluate(() => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Í', code: 'KeyM', altKey: true, shiftKey: true })
+      );
+      const seg = document
+        .getElementById('sho-panel-host')
+        .shadowRoot.querySelector('.seg:not(.dockseg)');
+      return [...seg.querySelectorAll('button')].findIndex(
+        (b) => b.getAttribute('aria-checked') === 'true'
+      );
+    });
+    expect(afterM).toBe(1); // cycled from 'level' to 'component'
+  });
+
+  test('a repeated copy is re-announced by the live region', async ({ page }) => {
+    await page.goto(fixture);
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, 'clipboard', {
+        value: { writeText: () => Promise.resolve() },
+        configurable: true,
+      });
+    });
+    await page.evaluate(walkerSrc);
+    await page.evaluate(overlaySrc);
+    await page.waitForTimeout(300);
+
+    const announce = () =>
+      page.evaluate(async () => {
+        window.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'c', altKey: true, shiftKey: true })
+        );
+        await new Promise((r) => setTimeout(r, 60));
+        return document
+          .getElementById('sho-panel-host')
+          .shadowRoot.querySelector('[aria-live]').textContent;
+      });
+
+    const first = await announce();
+    const second = await announce();
+    expect(first).toContain('Copied');
+    expect(second).toContain('Copied');
+    // Identical text is not a change, and a live region only announces changes,
+    // so the second of two copies used to be silent for screen-reader users.
+    expect(second).not.toBe(first);
+  });
+
   test('arrow-key navigation and focus-triggered tooltips', async ({ page }) => {
     await page.goto(fixture);
     await page.evaluate(walkerSrc);
@@ -621,6 +684,47 @@ test.describe('live updates', () => {
     // to hand a developer.
     expect(results).toHaveLength(5);
     for (const r of results) expect(r.ok, `selector for "${r.heading}"`).toBe(true);
+  });
+});
+
+/**
+ * Page-level hierarchy findings that aren't tied to a single heading. The
+ * per-heading checks (empty, skipped level) are covered by the fixture tests;
+ * these need pages the fixture deliberately doesn't look like.
+ */
+test.describe('page-level findings', () => {
+  const boot = async (page, html) => {
+    // setContent rewrites the document but keeps the window, so a second boot
+    // in the same test would toggle the already-installed tool off instead of
+    // starting fresh. A real navigation resets the JS world.
+    await page.goto('about:blank');
+    await page.setContent(html);
+    await page.evaluate(walkerSrc);
+    await page.evaluate(overlaySrc);
+    await page.waitForTimeout(400);
+  };
+  const outline = (page) => page.evaluate(() => window.__shadowHeadingOutliner.outlineText());
+
+  test('a page with no h1 reports no-h1 and starts-below-h1, as advisories', async ({ page }) => {
+    await boot(page, '<h2>Alpha</h2><h3>Beta</h3>');
+    const text = await outline(page);
+    expect(text).toContain('no level-1 heading');
+    expect(text).toContain('starts below h1');
+    // Advisories, not violations: nothing here fails a Success Criterion.
+    const stats = await page.evaluate(() => window.__shadowHeadingOutliner.stats);
+    expect(stats.violations).toBe(0);
+    expect(stats.advisories).toBeGreaterThanOrEqual(1);
+  });
+
+  test('two h1s report multiple-h1; a clean page reports nothing', async ({ page }) => {
+    await boot(page, '<h1>One</h1><h1>Two</h1>');
+    expect(await outline(page)).toContain('More than one level-1 heading');
+
+    await boot(page, '<h1>Only</h1><h2>Section</h2>');
+    const clean = await outline(page);
+    expect(clean).not.toContain('More than one level-1 heading');
+    expect(clean).not.toContain('no level-1 heading');
+    expect(clean).not.toContain('starts below h1');
   });
 });
 

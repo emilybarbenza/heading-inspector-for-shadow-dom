@@ -221,11 +221,6 @@
   //  - doc-* and graphics-* are present because they are real roles that DO
   //    displace the native one: Chrome computes `<h2 role="doc-subtitle">` as a
   //    doc-subtitle, not a heading, and leaving them out invented headings.
-  // Concrete WAI-ARIA roles. ARIA's *abstract* roles (structure, widget,
-  // section, command, input, range, roletype, sectionhead, landmark, composite,
-  // select, window) are deliberately absent: authors may not use them and
-  // browsers ignore them outright, so `<h2 role="structure">` is still a
-  // heading. Treating them as real roles made such headings vanish entirely.
   const ARIA_ROLES = new Set(
     ('alert alertdialog application article associationlist associationlistitemkey ' +
       'associationlistitemvalue banner blockquote button caption cell checkbox code ' +
@@ -1075,8 +1070,11 @@
       ta.style.cssText = 'position:fixed;top:-1000px;opacity:0';
       document.body.appendChild(ta);
       ta.select();
-      document.execCommand('copy');
+      // execCommand signals failure by returning false, not by throwing, so
+      // ignoring the result would flash "Copied" over an empty clipboard.
+      const ok = document.execCommand('copy');
       ta.remove();
+      if (!ok) throw new Error('copy rejected');
       flash('Copied');
     } catch (_) {
       flash('Copy failed, see console');
@@ -1085,10 +1083,15 @@
   }
 
   let flashTimer = 0;
+  let flashTick = false;
   function flash(msg) {
     // Announce to screen readers too: the chip note is aria-hidden, so a
     // visually-hidden live region in the panel carries the confirmation.
-    if (panelStatus) panelStatus.textContent = msg;
+    // A repeat ("Copied" twice in a row) is not a DOM change, and a live
+    // region only announces changes; alternating an invisible suffix makes
+    // every flash a fresh announcement.
+    flashTick = !flashTick;
+    if (panelStatus) panelStatus.textContent = msg + (flashTick ? '' : '\u00a0');
     if (!chipNote) return;
     chipNote.textContent = msg;
     clearTimeout(flashTimer);
@@ -1950,6 +1953,28 @@
     if (typeof h === 'number') {
       panelHost.style.setProperty('--panelh', `${Math.min(maxH(), Math.max(MIN_H, h))}px`);
     }
+    syncGripValue();
+  }
+
+  /* A focusable separator is a widget, and ARIA requires aria-valuenow on it
+     (axe flags the omission as critical: a screen reader announces a control
+     with no value and no range). The value is the panel's position within its
+     resizable range on the axis the current dock resizes — width for the side
+     docks and float, height for top/bottom — as 0-100. Kept in sync by
+     setPanelSize (every drag, arrow key and clamp lands there) and applyDock
+     (a dock change swaps the axis being reported). */
+  function syncGripValue() {
+    const grip = panelHost && panelRoot.querySelector('.grip');
+    if (!grip) return;
+    const vertical = dock === 'top' || dock === 'bottom';
+    const { w, h } = panelSize();
+    const size = vertical ? h : w;
+    const min = vertical ? MIN_H : MIN_W;
+    const max = vertical ? maxH() : maxW();
+    const pct = Math.round(((size - min) / Math.max(1, max - min)) * 100);
+    grip.setAttribute('aria-valuemin', '0');
+    grip.setAttribute('aria-valuemax', '100');
+    grip.setAttribute('aria-valuenow', String(Math.min(100, Math.max(0, pct))));
   }
 
   /**
@@ -1983,10 +2008,15 @@
     const up = () => {
       removeEventListener('pointermove', move);
       removeEventListener('pointerup', up);
+      removeEventListener('pointercancel', up);
       saveLayout();
     };
     addEventListener('pointermove', move);
     addEventListener('pointerup', up);
+    // A cancelled pointer (touch stolen by a scroll gesture, alt-tab mid-drag)
+    // fires pointercancel and never pointerup; without this the move listener
+    // stays attached and the panel chases the pointer forever after.
+    addEventListener('pointercancel', up);
   }
 
   // Arrow keys on the focused separator, so resizing isn't pointer-only. This is
@@ -2025,10 +2055,12 @@
     const up = () => {
       removeEventListener('pointermove', move);
       removeEventListener('pointerup', up);
+      removeEventListener('pointercancel', up);
       saveLayout();
     };
     addEventListener('pointermove', move);
     addEventListener('pointerup', up);
+    addEventListener('pointercancel', up);
   }
 
   function setDock(next) {
@@ -2056,6 +2088,7 @@
         dock === 'float'
           ? 'Drag to resize, or use the arrow keys. Drag the header to move.'
           : 'Drag to resize, or use the arrow keys.';
+      syncGripValue();
     }
 
     for (const b of panelRoot.querySelectorAll('.dockseg button')) {
@@ -2710,7 +2743,15 @@
       return;
     }
     if (e.altKey && e.shiftKey) {
-      const k = (e.key || '').toLowerCase();
+      // The letter comes from the physical key (e.code) when there is one:
+      // macOS composes Option+Shift+letter into a symbol, so e.key arrives as
+      // "Í" or "Ç" and never matches, and non-Latin layouts have the same
+      // problem for a different reason. e.key stays as the fallback for
+      // synthetic events and keyboards without standard codes.
+      const code = e.code || '';
+      const k = /^Key[A-Z]$/.test(code)
+        ? code.slice(3).toLowerCase()
+        : (e.key || '').toLowerCase();
       if (k === 'm') {
         e.preventDefault();
         cycleMode();
@@ -2849,7 +2890,12 @@
     layer.addEventListener('click', onLayerClick, true);
 
     clearInterval(safetyTimer);
-    safetyTimer = setInterval(rescan, SAFETY_SCAN);
+    // Skip the walk while the tab is hidden: nobody is looking, backgrounded
+    // timers are throttled anyway, and the first scan after the tab returns
+    // (or any mutation-driven one) covers whatever changed meanwhile.
+    safetyTimer = setInterval(() => {
+      if (!document.hidden) rescan();
+    }, SAFETY_SCAN);
 
     loadMode();
     schedule();
@@ -2875,6 +2921,12 @@
     removeEventListener('blur', onWindowBlur);
     items = [];
     modalEl = null;
+    // Clear the audit state too, so an api consumer reading outlineText() or
+    // stats after a toggle-off sees an empty outline rather than the last
+    // scan's page-level findings reported against zero headings.
+    pageProblems = [];
+    frameOutlines = [];
+    stats = emptyStats();
     // Move back out of any dialog before unmounting, so the next toggle starts
     // from the body rather than from a dialog that may since have closed.
     syncModalHome();
